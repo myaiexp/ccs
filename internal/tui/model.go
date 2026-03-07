@@ -535,8 +535,8 @@ func gridPosition(grid [][]int, idx int) (int, int) {
 	return 0, 0
 }
 
-// detailPaneHeight is the fixed height consumed by the detail pane (border + content lines).
-const detailPaneHeight = 7
+// detailPaneLines is the number of lines the detail pane consumes (border top/bottom + 5 content lines).
+const detailPaneLines = 7
 
 // View renders the full TUI.
 func (m Model) View() string {
@@ -548,7 +548,7 @@ func (m Model) View() string {
 		return m.renderHelp()
 	}
 
-	availHeight := m.height - 2 // border
+	availHeight := m.height - 2 // outer border
 
 	var sections []string
 
@@ -562,32 +562,38 @@ func (m Model) View() string {
 	sections = append(sections, header)
 
 	// Sessions header
+	showDetail := m.focus == FocusSessions && len(m.filtered) > 0
 	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
 	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
 	sections = append(sections, sessHeader)
 
-	// Reserve space: header(1) + sess header(2) + detail(7) + proj header(2) + proj rows(~3) + footer(2) + border(2)
-	overhead := 19
-	if m.focus != FocusSessions {
-		overhead -= detailPaneHeight // no detail pane when projects focused
+	// Calculate how many session rows fit.
+	// Fixed overhead: header(1) + sess header with margin(2) + proj header with margin(2) + proj rows(~3) + footer with margin(2) + scroll indicator(1)
+	fixedOverhead := 11
+	if showDetail {
+		fixedOverhead += detailPaneLines
 	}
-	maxSessions := availHeight - overhead
-	if maxSessions < 3 {
-		maxSessions = 3
+	maxRows := availHeight - fixedOverhead
+	if maxRows < 3 {
+		maxRows = 3
 	}
-	if maxSessions > len(m.filtered) {
-		maxSessions = len(m.filtered)
+	if maxRows > len(m.filtered) {
+		maxRows = len(m.filtered)
 	}
 
-	// Determine scroll window
-	start := 0
-	if m.sessionIdx >= maxSessions {
-		start = m.sessionIdx - maxSessions + 1
+	// Center-scroll: keep selection in the middle of the visible window,
+	// except at the start/end of the list where it naturally pins.
+	half := maxRows / 2
+	start := m.sessionIdx - half
+	if start < 0 {
+		start = 0
 	}
-	end := start + maxSessions
+	if start > len(m.filtered)-maxRows {
+		start = max(0, len(m.filtered)-maxRows)
+	}
+	end := start + maxRows
 	if end > len(m.filtered) {
 		end = len(m.filtered)
-		start = max(0, end-maxSessions)
 	}
 
 	if len(m.filtered) == 0 {
@@ -596,17 +602,16 @@ func (m Model) View() string {
 		for i := start; i < end; i++ {
 			s := m.filtered[i]
 			sections = append(sections, m.renderSession(i, s))
+			// Inline detail pane directly after the selected row
+			if showDetail && i == m.sessionIdx {
+				sections = append(sections, m.renderDetail(s))
+			}
 		}
-		// Scroll indicator
-		if len(m.filtered) > maxSessions {
+		// Scroll position indicator
+		if len(m.filtered) > maxRows {
 			indicator := dimStyle.Render(fmt.Sprintf("  ── %d/%d ──", m.sessionIdx+1, len(m.filtered)))
 			sections = append(sections, indicator)
 		}
-	}
-
-	// Detail pane (only when sessions focused and have selection)
-	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		sections = append(sections, m.renderDetail(m.filtered[m.sessionIdx]))
 	}
 
 	// Projects
