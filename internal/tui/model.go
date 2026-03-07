@@ -568,8 +568,15 @@ func (m Model) View() string {
 	sections = append(sections, sessHeader)
 
 	// Calculate how many session rows fit.
-	// Fixed overhead: header(1) + sess header with margin(2) + proj header with margin(2) + proj rows(~3) + footer with margin(2) + scroll indicator(1)
-	fixedOverhead := 11
+	// Count actual lines consumed by non-session sections:
+	// header(1) + sess header with margin(2) + scroll indicator(1) +
+	// proj header with margin(2) + footer with margin(2) = 8 fixed
+	// Plus project grid rows (estimate from actual data)
+	projGridRows := len(m.projectGrid())
+	if projGridRows == 0 {
+		projGridRows = 1
+	}
+	fixedOverhead := 8 + projGridRows
 	if showDetail {
 		fixedOverhead += detailPaneLines
 	}
@@ -658,7 +665,8 @@ func (m Model) renderSession(idx int, s types.Session) string {
 	}
 
 	// Number (1-indexed)
-	num := numStyle.Render(fmt.Sprintf("[%d]", idx+1))
+	numStr := fmt.Sprintf("[%d]", idx+1)
+	num := numStyle.Render(numStr)
 
 	// Project name (truncate if needed)
 	projName := s.ProjectName
@@ -666,24 +674,30 @@ func (m Model) renderSession(idx int, s types.Session) string {
 		projName = projName[:13] + "…"
 	}
 
-	// Title (truncate)
-	title := s.Title
-	maxTitle := m.width - 36
-	if maxTitle < 20 {
-		maxTitle = 20
+	// Context %
+	ctxStr := fmt.Sprintf("%d%%", s.ContextPct)
+
+	// Time
+	timeStr := formatDuration(s.LastActive)
+
+	// Calculate remaining width for title:
+	// prefix(1) + space(1) + num + space(1) + projName(padded to 14) + 2spaces(2) + title + 2spaces(2) + ctx(~4) + space(1) + time(~6)
+	// Also account for outer border padding (4 chars: 2 border + 2 padding)
+	fixedWidth := 1 + 1 + len(numStr) + 1 + 14 + 2 + 2 + len(ctxStr) + 1 + len(timeStr) + 4
+	maxTitle := m.width - fixedWidth
+	if maxTitle < 10 {
+		maxTitle = 10
 	}
+
+	title := s.Title
 	if len(title) > maxTitle {
 		title = title[:maxTitle-1] + "…"
 	}
 
-	// Context %
-	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-
-	// Time
-	timeStr := dimStyle.Render(formatDuration(s.LastActive))
-
-	line := fmt.Sprintf("%s %s %-14s  %-*s  %4s %s",
-		prefix, num, projName, maxTitle, title, ctxStr, timeStr)
+	line := fmt.Sprintf("%s %s %-14s  %-*s  %s %s",
+		prefix, num, projName, maxTitle, title,
+		contextStyle(s.ContextPct).Render(ctxStr),
+		dimStyle.Render(timeStr))
 
 	if isSelected {
 		return selectedStyle.Render(line)
