@@ -178,13 +178,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Number shortcuts for sessions
+	// Number shortcuts: 1-9 map to visible sessions in the scroll window
 	if key >= "1" && key <= "9" {
-		idx := int(key[0]-'0') - 1
-		if idx < len(m.filtered) {
-			return m, func() tea.Msg {
-				return LaunchResumeMsg{Session: m.filtered[idx]}
+		n := int(key[0]-'0') - 1 // 0-indexed within visible window
+		start, end := m.scrollWindow()
+		// Skip the selected session (it's the detail pane, not numbered)
+		visibleIdx := 0
+		for i := start; i < end; i++ {
+			if m.focus == FocusSessions && i == m.sessionIdx {
+				continue // detail pane slot, not numbered
 			}
+			if visibleIdx == n {
+				return m, func() tea.Msg {
+					return LaunchResumeMsg{Session: m.filtered[i]}
+				}
+			}
+			visibleIdx++
 		}
 		return m, nil
 	}
@@ -469,6 +478,41 @@ func (m *Model) clampIndices() {
 	}
 }
 
+// scrollWindow returns the start and end indices for the visible session window.
+func (m *Model) scrollWindow() (int, int) {
+	showDetail := m.focus == FocusSessions && len(m.filtered) > 0
+	projGridRows := len(m.projectGrid())
+	if projGridRows == 0 {
+		projGridRows = 1
+	}
+	fixedOverhead := 8 + projGridRows
+	if showDetail {
+		fixedOverhead += detailPaneLines
+	}
+	availHeight := m.height - 2
+	maxRows := availHeight - fixedOverhead
+	if maxRows < 3 {
+		maxRows = 3
+	}
+	if maxRows > len(m.filtered) {
+		maxRows = len(m.filtered)
+	}
+
+	half := maxRows / 2
+	start := m.sessionIdx - half
+	if start < 0 {
+		start = 0
+	}
+	if start > len(m.filtered)-maxRows {
+		start = max(0, len(m.filtered)-maxRows)
+	}
+	end := start + maxRows
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+	return start, end
+}
+
 func filterVisibleProjects(projects []types.Project, showHidden bool) []types.Project {
 	if showHidden {
 		return projects
@@ -606,13 +650,14 @@ func (m Model) View() string {
 	if len(m.filtered) == 0 {
 		sections = append(sections, dimStyle.Render("  no sessions"))
 	} else {
+		visNum := 1 // window-local number for shortcuts (1-9)
 		for i := start; i < end; i++ {
 			s := m.filtered[i]
 			if showDetail && i == m.sessionIdx {
-				// Selected session: render detail pane instead of regular row
-				sections = append(sections, m.renderDetail(i, s))
+				sections = append(sections, m.renderDetail(s))
 			} else {
-				sections = append(sections, m.renderSession(i, s))
+				sections = append(sections, m.renderSession(visNum, s))
+				visNum++
 			}
 		}
 		// Scroll position indicator
@@ -652,21 +697,19 @@ func (m Model) View() string {
 	return borderStyle.Render(content)
 }
 
-func (m Model) renderSession(idx int, s types.Session) string {
-	isSelected := m.focus == FocusSessions && idx == m.sessionIdx
-
-	// Cursor / dot
+// renderSession renders a non-selected session row. visNum is the window-local
+// shortcut number (1-9+), not the global index.
+func (m Model) renderSession(visNum int, s types.Session) string {
+	// Dot
 	var prefix string
-	if isSelected {
-		prefix = cursorStyle.Render("▸")
-	} else if s.IsActive {
+	if s.IsActive {
 		prefix = activeDot
 	} else {
 		prefix = inactiveDot
 	}
 
-	// Number (1-indexed)
-	numStr := fmt.Sprintf("[%d]", idx+1)
+	// Window-local number
+	numStr := fmt.Sprintf("[%d]", visNum)
 	num := numStyle.Render(numStr)
 
 	// Project name (truncate if needed)
@@ -681,10 +724,21 @@ func (m Model) renderSession(idx int, s types.Session) string {
 	// Time
 	timeStr := formatDuration(s.LastActive)
 
-	// Calculate remaining width for title:
-	// prefix(1) + space(1) + num + space(1) + projName(padded to 14) + 2spaces(2) + title + 2spaces(2) + ctx(~4) + space(1) + time(~6)
-	// Also account for outer border padding (4 chars: 2 border + 2 padding)
-	fixedWidth := 1 + 1 + len(numStr) + 1 + 14 + 2 + 2 + len(ctxStr) + 1 + len(timeStr) + 4
+	// Hidden label (only visible in show-hidden mode)
+	hiddenLabel := ""
+	hiddenWidth := 0
+	if m.showHidden {
+		for _, id := range m.config.HiddenSessions {
+			if id == s.ID {
+				hiddenLabel = dimStyle.Render("[hidden] ")
+				hiddenWidth = 9
+				break
+			}
+		}
+	}
+
+	// Calculate remaining width for title
+	fixedWidth := 1 + 1 + len(numStr) + 1 + 14 + 2 + 2 + hiddenWidth + len(ctxStr) + 1 + len(timeStr) + 4
 	maxTitle := m.width - fixedWidth
 	if maxTitle < 10 {
 		maxTitle = 10
@@ -695,18 +749,16 @@ func (m Model) renderSession(idx int, s types.Session) string {
 		title = title[:maxTitle-1] + "…"
 	}
 
-	line := fmt.Sprintf("%s %s %-14s  %-*s  %s %s",
+	line := fmt.Sprintf("%s %s %-14s  %-*s  %s%s %s",
 		prefix, num, projName, maxTitle, title,
+		hiddenLabel,
 		contextStyle(s.ContextPct).Render(ctxStr),
 		dimStyle.Render(timeStr))
 
-	if isSelected {
-		return selectedStyle.Render(line)
-	}
 	return line
 }
 
-func (m Model) renderDetail(idx int, s types.Session) string {
+func (m Model) renderDetail(s types.Session) string {
 	detailWidth := m.width - 6 // account for outer border + detail border + padding
 	if detailWidth < 40 {
 		detailWidth = 40
@@ -727,18 +779,16 @@ func (m Model) renderDetail(idx int, s types.Session) string {
 		}
 	}
 
-	// Header line: number + project + title + right-aligned ctx% and time
+	// Header line: project + title + right-aligned ctx% and time
 	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
 	timeStr := dimStyle.Render(formatDuration(s.LastActive))
 	rightSide := ctxStr + " " + timeStr
 
-	numStr := fmt.Sprintf("[%d]", idx+1)
 	projName := s.ProjectName
 	if len(projName) > 14 {
 		projName = projName[:13] + "…"
 	}
-	leftSide := numStyle.Render(numStr) + " " +
-		detailValueStyle.Render(projName) + "  " +
+	leftSide := detailValueStyle.Render(projName) + "  " +
 		detailValueStyle.Render(s.Title)
 
 	// Pad to push ctx%/time to the right edge
