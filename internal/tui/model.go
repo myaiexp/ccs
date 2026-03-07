@@ -52,7 +52,6 @@ type Model struct {
 	launching    bool
 	sortField    types.SortField
 	sortDir      types.SortDir
-	projCols     int // cached: number of project columns per row
 }
 
 func New(sessions []types.Session, projects []types.Project, cfg *types.Config) Model {
@@ -91,7 +90,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.projCols = 0 // invalidate cache
 		return m, nil
 
 	case LaunchResumeMsg:
@@ -287,9 +285,15 @@ func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 				m.sessionIdx--
 			}
 		} else {
-			cols := m.getProjectCols()
-			if m.projectIdx >= cols {
-				m.projectIdx -= cols
+			grid := m.projectGrid()
+			r, c := gridPosition(grid, m.projectIdx)
+			if r > 0 {
+				targetRow := grid[r-1]
+				if c < len(targetRow) {
+					m.projectIdx = targetRow[c]
+				} else {
+					m.projectIdx = targetRow[len(targetRow)-1]
+				}
 			}
 		}
 
@@ -299,12 +303,15 @@ func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 				m.sessionIdx++
 			}
 		} else {
-			cols := m.getProjectCols()
-			newIdx := m.projectIdx + cols
-			if newIdx < len(m.filteredProj) {
-				m.projectIdx = newIdx
-			} else if m.projectIdx < len(m.filteredProj)-1 {
-				m.projectIdx = len(m.filteredProj) - 1
+			grid := m.projectGrid()
+			r, c := gridPosition(grid, m.projectIdx)
+			if r < len(grid)-1 {
+				targetRow := grid[r+1]
+				if c < len(targetRow) {
+					m.projectIdx = targetRow[c]
+				} else {
+					m.projectIdx = targetRow[len(targetRow)-1]
+				}
 			}
 		}
 
@@ -475,13 +482,12 @@ func filterVisibleProjects(projects []types.Project, showHidden bool) []types.Pr
 	return visible
 }
 
-// getProjectCols calculates how many project items fit per row.
-func (m *Model) getProjectCols() int {
-	if m.projCols > 0 {
-		return m.projCols
-	}
+// projectGrid computes the actual row layout of the project grid,
+// matching how renderProjects wraps items by width.
+// Returns rows where each row is a slice of item indices.
+func (m *Model) projectGrid() [][]int {
 	if len(m.filteredProj) == 0 {
-		return 1
+		return nil
 	}
 
 	maxWidth := m.width - 4
@@ -489,22 +495,44 @@ func (m *Model) getProjectCols() int {
 		maxWidth = 40
 	}
 
-	// Estimate: average project name length + separator " · " (3 chars)
-	cols := 0
+	sepWidth := 3 // " · "
+	var rows [][]int
+	var currentRow []int
 	lineWidth := 0
-	for _, p := range m.filteredProj {
-		w := len(p.Name) + 3 // name + " · "
-		if lineWidth+w > maxWidth && lineWidth > 0 {
-			break
+
+	for i, p := range m.filteredProj {
+		nameWidth := lipgloss.Width(p.Name)
+		addition := nameWidth
+		if len(currentRow) > 0 {
+			addition += sepWidth
 		}
-		lineWidth += w
-		cols++
+
+		if lineWidth+addition > maxWidth && len(currentRow) > 0 {
+			rows = append(rows, currentRow)
+			currentRow = []int{i}
+			lineWidth = nameWidth
+		} else {
+			currentRow = append(currentRow, i)
+			lineWidth += addition
+		}
 	}
-	if cols == 0 {
-		cols = 1
+	if len(currentRow) > 0 {
+		rows = append(rows, currentRow)
 	}
-	m.projCols = cols
-	return cols
+
+	return rows
+}
+
+// gridPosition returns (row, col) for a given item index in the grid.
+func gridPosition(grid [][]int, idx int) (int, int) {
+	for r, row := range grid {
+		for c, itemIdx := range row {
+			if itemIdx == idx {
+				return r, c
+			}
+		}
+	}
+	return 0, 0
 }
 
 // View renders the full TUI.
@@ -792,7 +820,6 @@ func (m *Model) handleRefresh() tea.Cmd {
 
 	m.sessions = sessions
 	m.projects = project.DiscoverProjects(sessions, active, m.config)
-	m.projCols = 0 // invalidate cache
 	m.applyFilter()
 	return nil
 }
