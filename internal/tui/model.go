@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,6 +12,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 
+	"ccs/internal/project"
+	"ccs/internal/session"
 	"ccs/internal/types"
 )
 
@@ -76,14 +80,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LaunchResumeMsg:
 		m.launching = true
-		return m, tea.Quit
+		return m, LaunchResume(msg.Session, m.config.ClaudeFlags)
 
 	case LaunchNewMsg:
 		m.launching = true
-		return m, tea.Quit
+		return m, LaunchNew(msg.Project, m.config.ClaudeFlags)
+
+	case ExecFinishedMsg:
+		m.launching = false
+		return m, refreshCmd()
 
 	case RefreshMsg:
-		return m, nil
+		return m, m.handleRefresh()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -516,6 +524,44 @@ func (m Model) renderHelp() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
 	}
 	return styled
+}
+
+func refreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		return RefreshMsg{}
+	}
+}
+
+func (m *Model) handleRefresh() tea.Cmd {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	projectsDir := filepath.Join(home, ".claude", "projects")
+
+	sessions, err := session.DiscoverSessions(projectsDir)
+	if err != nil {
+		return nil
+	}
+
+	activeDirs := session.DetectActive()
+
+	// Mark active sessions
+	for i := range sessions {
+		s := &sessions[i]
+		for dir := range activeDirs {
+			_, absPath := session.DecodeProjectDir(dir)
+			if absPath == s.ProjectDir {
+				s.IsActive = true
+				break
+			}
+		}
+	}
+
+	m.sessions = sessions
+	m.projects = project.DiscoverProjects(sessions, activeDirs, m.config)
+	m.applyFilter()
+	return nil
 }
 
 func formatDuration(t time.Time) string {
