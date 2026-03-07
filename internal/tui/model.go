@@ -608,10 +608,11 @@ func (m Model) View() string {
 	} else {
 		for i := start; i < end; i++ {
 			s := m.filtered[i]
-			sections = append(sections, m.renderSession(i, s))
-			// Inline detail pane directly after the selected row
 			if showDetail && i == m.sessionIdx {
-				sections = append(sections, m.renderDetail(s))
+				// Selected session: render detail pane instead of regular row
+				sections = append(sections, m.renderDetail(i, s))
+			} else {
+				sections = append(sections, m.renderSession(i, s))
 			}
 		}
 		// Scroll position indicator
@@ -705,7 +706,7 @@ func (m Model) renderSession(idx int, s types.Session) string {
 	return line
 }
 
-func (m Model) renderDetail(s types.Session) string {
+func (m Model) renderDetail(idx int, s types.Session) string {
 	detailWidth := m.width - 6 // account for outer border + detail border + padding
 	if detailWidth < 40 {
 		detailWidth = 40
@@ -726,17 +727,16 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
-	// Full title (wrap to width)
-	fullTitle := s.Title
-	if len(fullTitle) > detailWidth {
-		fullTitle = fullTitle[:detailWidth-1] + "…"
-	}
+	// Header line: cursor + number + title (full, may wrap within the pane)
+	headerLine := cursorStyle.Render("▸") + " " +
+		numStyle.Render(fmt.Sprintf("[%d]", idx+1)) + " " +
+		detailValueStyle.Render(s.Title)
 
 	// File size
 	sizeStr := formatSize(s.FileSize)
 
 	lines := []string{
-		detailValueStyle.Render(fullTitle),
+		headerLine,
 		"",
 		detailLabelStyle.Render("Project ") + detailValueStyle.Render(s.ProjectName) +
 			dimStyle.Render("  "+s.ProjectDir),
