@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 
+	"ccs/internal/config"
 	"ccs/internal/project"
 	"ccs/internal/session"
 	"ccs/internal/types"
@@ -25,7 +27,7 @@ const (
 	FocusProjects
 )
 
-// Messages for launching sessions (wired in Task 7).
+// Messages for launching sessions.
 type LaunchResumeMsg struct{ Session types.Session }
 type LaunchNewMsg struct{ Project types.Project }
 type RefreshMsg struct{}
@@ -48,6 +50,9 @@ type Model struct {
 	width        int
 	height       int
 	launching    bool
+	sortField    types.SortField
+	sortDir      types.SortDir
+	projCols     int // cached: number of project columns per row
 }
 
 func New(sessions []types.Session, projects []types.Project, cfg *types.Config) Model {
@@ -56,15 +61,23 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config) 
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
 
+	// Filter out hidden sessions
+	hiddenSet := make(map[string]bool, len(cfg.HiddenSessions))
+	for _, id := range cfg.HiddenSessions {
+		hiddenSet[id] = true
+	}
+
 	m := Model{
 		sessions:     sessions,
-		filtered:     sessions,
 		projects:     projects,
 		filteredProj: filterVisibleProjects(projects, false),
 		config:       cfg,
 		filter:       ti,
 		focus:        FocusSessions,
+		sortField:    types.SortByTime,
+		sortDir:      types.SortDesc,
 	}
+	m.applyFilter()
 
 	return m
 }
@@ -78,6 +91,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.projCols = 0 // invalidate cache
 		return m, nil
 
 	case LaunchResumeMsg:
@@ -128,12 +142,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.applyFilter()
 			return m, nil
 		case "enter":
-			// Accept filter and switch to navigation
 			m.filtering = false
 			m.filter.Blur()
 			return m, nil
 		case "up", "down", "tab":
-			// Allow navigation while filtering
 			return m.handleNavigation(key)
 		default:
 			var cmd tea.Cmd
@@ -154,7 +166,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "y":
 			if m.confirmSess != nil {
-				// Delete the JSONL and subagents dir
 				os.Remove(m.confirmSess.FilePath)
 				subagentsDir := strings.TrimSuffix(m.confirmSess.FilePath, ".jsonl")
 				os.RemoveAll(subagentsDir)
@@ -198,6 +209,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		return m.handleNavigation("down")
 
+	case "left":
+		return m.handleNavigation("left")
+
+	case "right":
+		return m.handleNavigation("right")
+
 	case "enter":
 		return m.handleEnter()
 
@@ -211,6 +228,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirming = true
 			m.confirmSess = &sess
 		}
+		return m, nil
+
+	case "s":
+		m.sortField = m.sortField.Next()
+		m.sessionIdx = 0
+		m.sortAndFilter()
+		return m, nil
+
+	case "r":
+		m.sortDir = m.sortDir.Toggle()
+		m.sessionIdx = 0
+		m.sortAndFilter()
+		return m, nil
+
+	case "x":
+		m.toggleHideSession()
 		return m, nil
 
 	case "h":
@@ -233,7 +266,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleNavigation(key string) (tea.Model, tea.Cmd) {
+func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 	switch key {
 	case "tab":
 		if m.focus == FocusSessions {
@@ -247,22 +280,43 @@ func (m Model) handleNavigation(key string) (tea.Model, tea.Cmd) {
 				m.sessionIdx = 0
 			}
 		}
+
 	case "up":
 		if m.focus == FocusSessions {
 			if m.sessionIdx > 0 {
 				m.sessionIdx--
 			}
 		} else {
-			if m.projectIdx > 0 {
-				m.projectIdx--
+			cols := m.getProjectCols()
+			if m.projectIdx >= cols {
+				m.projectIdx -= cols
 			}
 		}
+
 	case "down":
 		if m.focus == FocusSessions {
 			if m.sessionIdx < len(m.filtered)-1 {
 				m.sessionIdx++
 			}
 		} else {
+			cols := m.getProjectCols()
+			newIdx := m.projectIdx + cols
+			if newIdx < len(m.filteredProj) {
+				m.projectIdx = newIdx
+			} else if m.projectIdx < len(m.filteredProj)-1 {
+				m.projectIdx = len(m.filteredProj) - 1
+			}
+		}
+
+	case "left":
+		if m.focus == FocusProjects {
+			if m.projectIdx > 0 {
+				m.projectIdx--
+			}
+		}
+
+	case "right":
+		if m.focus == FocusProjects {
 			if m.projectIdx < len(m.filteredProj)-1 {
 				m.projectIdx++
 			}
@@ -271,7 +325,7 @@ func (m Model) handleNavigation(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleEnter() (tea.Model, tea.Cmd) {
+func (m Model) handleEnter() (Model, tea.Cmd) {
 	if m.focus == FocusSessions && len(m.filtered) > 0 {
 		sess := m.filtered[m.sessionIdx]
 		return m, func() tea.Msg {
@@ -287,25 +341,76 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) toggleHideSession() {
+	if m.focus != FocusSessions || len(m.filtered) == 0 {
+		return
+	}
+	sess := m.filtered[m.sessionIdx]
+
+	// Toggle hidden status
+	found := false
+	var newHidden []string
+	for _, id := range m.config.HiddenSessions {
+		if id == sess.ID {
+			found = true
+			continue // remove it
+		}
+		newHidden = append(newHidden, id)
+	}
+	if !found {
+		newHidden = append(newHidden, sess.ID)
+	}
+	m.config.HiddenSessions = newHidden
+	config.Save(m.config)
+	m.applyFilter()
+}
+
 func (m *Model) applyFilter() {
 	query := m.filter.Value()
 
+	hiddenSet := make(map[string]bool, len(m.config.HiddenSessions))
+	for _, id := range m.config.HiddenSessions {
+		hiddenSet[id] = true
+	}
+
 	if query == "" {
-		m.filtered = m.sessions
+		if m.showHidden {
+			m.filtered = m.sessions
+		} else {
+			m.filtered = nil
+			for _, s := range m.sessions {
+				if !hiddenSet[s.ID] {
+					m.filtered = append(m.filtered, s)
+				}
+			}
+		}
 		m.filteredProj = filterVisibleProjects(m.projects, m.showHidden)
+		m.sortFiltered()
 		m.clampIndices()
 		return
 	}
 
+	// Build source list (respecting hidden)
+	var source []types.Session
+	if m.showHidden {
+		source = m.sessions
+	} else {
+		for _, s := range m.sessions {
+			if !hiddenSet[s.ID] {
+				source = append(source, s)
+			}
+		}
+	}
+
 	// Fuzzy filter sessions
-	targets := make([]string, len(m.sessions))
-	for i, s := range m.sessions {
+	targets := make([]string, len(source))
+	for i, s := range source {
 		targets[i] = s.ProjectName + " " + s.Title
 	}
 	matches := fuzzy.Find(query, targets)
 	m.filtered = make([]types.Session, len(matches))
 	for i, match := range matches {
-		m.filtered[i] = m.sessions[match.Index]
+		m.filtered[i] = source[match.Index]
 	}
 
 	// Fuzzy filter projects
@@ -320,7 +425,32 @@ func (m *Model) applyFilter() {
 		m.filteredProj[i] = visible[match.Index]
 	}
 
+	m.sortFiltered()
 	m.clampIndices()
+}
+
+func (m *Model) sortAndFilter() {
+	m.applyFilter()
+}
+
+func (m *Model) sortFiltered() {
+	sort.SliceStable(m.filtered, func(i, j int) bool {
+		var less bool
+		switch m.sortField {
+		case types.SortByTime:
+			less = m.filtered[i].LastActive.After(m.filtered[j].LastActive)
+		case types.SortByContext:
+			less = m.filtered[i].ContextPct > m.filtered[j].ContextPct
+		case types.SortBySize:
+			less = m.filtered[i].FileSize > m.filtered[j].FileSize
+		case types.SortByName:
+			less = strings.ToLower(m.filtered[i].Title) < strings.ToLower(m.filtered[j].Title)
+		}
+		if m.sortDir == types.SortAsc {
+			less = !less
+		}
+		return less
+	})
 }
 
 func (m *Model) clampIndices() {
@@ -345,6 +475,38 @@ func filterVisibleProjects(projects []types.Project, showHidden bool) []types.Pr
 	return visible
 }
 
+// getProjectCols calculates how many project items fit per row.
+func (m *Model) getProjectCols() int {
+	if m.projCols > 0 {
+		return m.projCols
+	}
+	if len(m.filteredProj) == 0 {
+		return 1
+	}
+
+	maxWidth := m.width - 4
+	if maxWidth < 40 {
+		maxWidth = 40
+	}
+
+	// Estimate: average project name length + separator " · " (3 chars)
+	cols := 0
+	lineWidth := 0
+	for _, p := range m.filteredProj {
+		w := len(p.Name) + 3 // name + " · "
+		if lineWidth+w > maxWidth && lineWidth > 0 {
+			break
+		}
+		lineWidth += w
+		cols++
+	}
+	if cols == 0 {
+		cols = 1
+	}
+	m.projCols = cols
+	return cols
+}
+
 // View renders the full TUI.
 func (m Model) View() string {
 	if m.launching {
@@ -359,11 +521,13 @@ func (m Model) View() string {
 
 	var sections []string
 
-	// Title + filter
+	// Title + filter + sort indicator
 	header := titleStyle.Render("ccs")
 	if m.filtering || m.filter.Value() != "" {
 		header += "  " + m.filter.View()
 	}
+	sortIndicator := dimStyle.Render(fmt.Sprintf("  sort: %s %s", m.sortField, m.sortDir))
+	header += sortIndicator
 	sections = append(sections, header)
 
 	// Sessions
@@ -371,7 +535,6 @@ func (m Model) View() string {
 	sections = append(sections, sessHeader)
 
 	// Calculate how many sessions we can show
-	// Reserve lines for: header(1) + sessions header(1+margin) + projects header(1+margin) + project row(1) + footer(1+margin) + border(2)
 	maxSessions := availHeight - 9
 	if maxSessions < 3 {
 		maxSessions = 3
@@ -462,8 +625,17 @@ func (m Model) renderSession(idx int, s types.Session) string {
 	// Time
 	timeStr := dimStyle.Render(formatDuration(s.LastActive))
 
-	line := fmt.Sprintf("%s %s %-14s  %-*s  %4s %s",
-		dot, num, projName, maxTitle, title, ctxStr, timeStr)
+	// Hidden indicator
+	hiddenMark := ""
+	for _, id := range m.config.HiddenSessions {
+		if id == s.ID {
+			hiddenMark = dimStyle.Render(" [hidden]")
+			break
+		}
+	}
+
+	line := fmt.Sprintf("%s %s %-14s  %-*s  %4s %s%s",
+		dot, num, projName, maxTitle, title, ctxStr, timeStr, hiddenMark)
 
 	if m.focus == FocusSessions && idx == m.sessionIdx {
 		return selectedStyle.Render(line)
@@ -502,7 +674,6 @@ func (m Model) renderProjects() string {
 		if i > 0 {
 			addition = sep + part
 		}
-		// Use rough length (strip ANSI is complex, approximate)
 		testLen := lipgloss.Width(currentLine + addition)
 		if testLen > maxWidth && currentLine != "" {
 			lines = append(lines, "  "+currentLine)
@@ -530,9 +701,12 @@ func (m Model) renderFooter() string {
 	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
 		hints = append(hints, "enter new")
 	}
-	hints = append(hints, "n new", "/ search", "tab switch")
+	hints = append(hints, "n new", "/ search", "tab switch", "s sort", "r reverse")
+	if m.focus == FocusSessions {
+		hints = append(hints, "x hide")
+	}
 	if m.showHidden {
-		hints = append(hints, "h hide")
+		hints = append(hints, "h hide hidden")
 	} else {
 		hints = append(hints, "h show hidden")
 	}
@@ -550,9 +724,12 @@ func (m Model) renderHelp() string {
 		"  /           Toggle filter bar",
 		"  esc         Clear filter / exit filter",
 		"  tab         Switch: sessions ↔ projects",
-		"  j/k ↑/↓     Navigate",
-		"  d           Mark session for deletion",
-		"  h           Toggle hidden projects",
+		"  j/k ↑/↓     Navigate (↑↓←→ in projects)",
+		"  s           Cycle sort: time → ctx% → size → name",
+		"  r           Reverse sort direction",
+		"  d           Delete session (with confirm)",
+		"  x           Hide/unhide session",
+		"  h           Toggle showing hidden items",
 		"  ?           Toggle this help",
 		"  q / ctrl+c  Quit",
 	}, "\n")
@@ -583,22 +760,39 @@ func (m *Model) handleRefresh() tea.Cmd {
 		return nil
 	}
 
-	activeDirs := session.DetectActive()
+	active := session.DetectActive()
 
-	// Mark active sessions
+	// Mark active sessions using the same logic as main
+	// First: exact session ID matches
+	matchedDirs := make(map[string]bool)
 	for i := range sessions {
-		s := &sessions[i]
-		for dir := range activeDirs {
-			_, absPath := session.DecodeProjectDir(dir)
-			if absPath == s.ProjectDir {
-				s.IsActive = true
+		if active.SessionIDs[sessions[i].ID] {
+			sessions[i].IsActive = true
+			for dir := range active.ProjectDirs {
+				_, absPath := session.DecodeProjectDir(dir)
+				if absPath == sessions[i].ProjectDir {
+					matchedDirs[dir] = true
+				}
+			}
+		}
+	}
+	// Second: most recent session per unmatched active project dir
+	for dir := range active.ProjectDirs {
+		if matchedDirs[dir] {
+			continue
+		}
+		_, absPath := session.DecodeProjectDir(dir)
+		for i := range sessions {
+			if sessions[i].ProjectDir == absPath {
+				sessions[i].IsActive = true
 				break
 			}
 		}
 	}
 
 	m.sessions = sessions
-	m.projects = project.DiscoverProjects(sessions, activeDirs, m.config)
+	m.projects = project.DiscoverProjects(sessions, active, m.config)
+	m.projCols = 0 // invalidate cache
 	m.applyFilter()
 	return nil
 }

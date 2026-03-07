@@ -5,12 +5,17 @@ import "github.com/charmbracelet/bubbles/key"
 type keyMap struct {
 	Up      key.Binding
 	Down    key.Binding
+	Left    key.Binding
+	Right   key.Binding
 	Enter   key.Binding
 	Tab     key.Binding
 	Filter  key.Binding
 	Escape  key.Binding
 	NewProj key.Binding
 	Delete  key.Binding
+	Sort    key.Binding
+	Reverse key.Binding
+	Hide    key.Binding
 	Hidden  key.Binding
 	Help    key.Binding
 	Quit    key.Binding
@@ -24,6 +29,14 @@ var keys = keyMap{
 	Down: key.NewBinding(
 		key.WithKeys("down", "j"),
 		key.WithHelp("↓/j", "down"),
+	),
+	Left: key.NewBinding(
+		key.WithKeys("left"),
+		key.WithHelp("←", "left"),
+	),
+	Right: key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "right"),
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
@@ -49,9 +62,21 @@ var keys = keyMap{
 		key.WithKeys("d"),
 		key.WithHelp("d", "delete"),
 	),
+	Sort: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "sort"),
+	),
+	Reverse: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "reverse"),
+	),
+	Hide: key.NewBinding(
+		key.WithKeys("x"),
+		key.WithHelp("x", "hide session"),
+	),
 	Hidden: key.NewBinding(
 		key.WithKeys("h"),
-		key.WithHelp("h", "hidden"),
+		key.WithHelp("h", "show hidden"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("?"),

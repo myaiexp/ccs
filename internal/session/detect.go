@@ -5,16 +5,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"ccs/internal/types"
 )
 
-// DetectActive returns a map of encoded project directory names that have
-// a running claude process. E.g. "-home-mse-Projects-foo" → true
-func DetectActive() map[string]bool {
-	active := make(map[string]bool)
+// DetectActive returns info about running claude processes:
+// which project dirs have active sessions and which specific session IDs
+// are being resumed.
+func DetectActive() types.ActiveInfo {
+	info := types.ActiveInfo{
+		ProjectDirs: make(map[string]bool),
+		SessionIDs:  make(map[string]bool),
+	}
 
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return active
+		return info
 	}
 
 	selfPID := os.Getpid()
@@ -58,10 +64,18 @@ func DetectActive() map[string]bool {
 		}
 
 		encoded := encodePathToProjectDir(cwd)
-		active[encoded] = true
+		info.ProjectDirs[encoded] = true
+
+		// Look for --resume <session-id> in args
+		for i, arg := range args {
+			if arg == "--resume" && i+1 < len(args) && args[i+1] != "" {
+				info.SessionIDs[args[i+1]] = true
+				break
+			}
+		}
 	}
 
-	return active
+	return info
 }
 
 // encodePathToProjectDir converts a filesystem path to the encoded directory

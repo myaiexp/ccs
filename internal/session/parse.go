@@ -34,8 +34,10 @@ type jsonUsage struct {
 }
 
 var (
-	renamedRe = regexp.MustCompile(`Session renamed to:\s*(.+?)(?:<|$)`)
-	htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+	renamedRe   = regexp.MustCompile(`Session renamed to:\s*(.+?)(?:<|$)`)
+	htmlTagRe   = regexp.MustCompile(`<[^>]*>`)
+	mdHeadingRe = regexp.MustCompile(`^#+\s*`)
+	mdBoldRe    = regexp.MustCompile(`\*\*([^*]*)\*\*`)
 )
 
 const maxContextTokens = 200000
@@ -114,13 +116,12 @@ func ParseSession(fpath string) (*types.Session, error) {
 	// Resolve title
 	if title == "" {
 		if fallbackText != "" {
-			title = stripHTML(fallbackText)
-			if len(title) > 80 {
-				title = title[:80]
-			}
+			title = cleanTitle(fallbackText)
 		} else {
 			title = "(untitled)"
 		}
+	} else {
+		title = cleanTitle(title)
 	}
 
 	// Context %
@@ -140,6 +141,7 @@ func ParseSession(fpath string) (*types.Session, error) {
 		ShortID:    shortID,
 		Title:      title,
 		FilePath:   fpath,
+		FileSize:   info.Size(),
 		ContextPct: contextPct,
 		MsgCount:   msgCount,
 		LastActive: info.ModTime(),
@@ -193,6 +195,30 @@ func getStringContent(entry *jsonLine) string {
 
 func stripHTML(s string) string {
 	return strings.TrimSpace(htmlTagRe.ReplaceAllString(s, ""))
+}
+
+// cleanTitle extracts a clean, single-line title from raw message content.
+func cleanTitle(s string) string {
+	// Strip HTML tags
+	s = stripHTML(s)
+	// Take first line only
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	// Strip markdown heading markers (## Foo → Foo)
+	s = mdHeadingRe.ReplaceAllString(s, "")
+	// Strip bold markers (**foo** → foo)
+	s = mdBoldRe.ReplaceAllString(s, "$1")
+	// Strip remaining lone asterisks/underscores used for emphasis
+	s = strings.ReplaceAll(s, "*", "")
+	s = strings.ReplaceAll(s, "__", "")
+	// Strip leading list/quote markers
+	s = strings.TrimLeft(s, "->+ ")
+	s = strings.TrimSpace(s)
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	return s
 }
 
 // DiscoverSessions finds all session JSONL files in the given projects dir,
