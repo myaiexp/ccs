@@ -8,6 +8,7 @@ type Session struct {
 	ProjectName string
 	ProjectDir  string
 	Title       string
+	FirstMsg    string // Full first user message (up to 500 chars, for detail pane)
 	ContextPct  int
 	MsgCount    int
 	FileSize    int64

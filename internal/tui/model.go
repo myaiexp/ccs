@@ -511,7 +511,7 @@ func (m *Model) scrollWindow() (int, int) {
 	}
 	fixedOverhead := 8 + projGridRows
 	if showDetail {
-		fixedOverhead += detailPaneLines
+		fixedOverhead += m.detailPaneLines()
 	}
 	availHeight := m.height - 2
 	maxRows := availHeight - fixedOverhead
@@ -604,8 +604,26 @@ func gridPosition(grid [][]int, idx int) (int, int) {
 	return 0, 0
 }
 
-// detailPaneLines is the number of lines the detail pane consumes (border top/bottom + 5 content lines).
-const detailPaneLines = 7
+// detailPaneLines calculates the number of lines the detail pane consumes
+// for the currently selected session (border + content including wrapped first message).
+func (m *Model) detailPaneLines() int {
+	if m.focus != FocusSessions || len(m.filtered) == 0 {
+		return 0
+	}
+	s := m.filtered[m.sessionIdx]
+	// Base: border(2) + header(1) + blank(1) + project(1) + stats(1) + id(1) = 7
+	base := 7
+	// Add wrapped first message lines
+	if s.FirstMsg != "" {
+		contentWidth := m.width - 8 // outer border(2) + padding(2) + detail border(2) + detail padding(2)
+		if contentWidth < 40 {
+			contentWidth = 40
+		}
+		msgLines := wrapText(s.FirstMsg, contentWidth)
+		base += len(msgLines) + 1 // +1 for blank line before message
+	}
+	return base
+}
 
 // View renders the full TUI.
 func (m Model) View() string {
@@ -651,7 +669,7 @@ func (m Model) View() string {
 	}
 	fixedOverhead := 8 + projGridRows
 	if showDetail {
-		fixedOverhead += detailPaneLines
+		fixedOverhead += m.detailPaneLines()
 	}
 	maxRows := availHeight - fixedOverhead
 	if maxRows < 3 {
@@ -806,6 +824,9 @@ func (m Model) renderDetail(s types.Session) string {
 	if detailWidth < 40 {
 		detailWidth = 40
 	}
+	if contentWidth < 38 {
+		contentWidth = 38
+	}
 
 	// Status
 	status := dimStyle.Render("○ inactive")
@@ -869,9 +890,48 @@ func (m Model) renderDetail(s types.Session) string {
 		detailLabelStyle.Render("ID ") + dimStyle.Render(s.ID),
 	}
 
+	// Full first message, word-wrapped
+	if s.FirstMsg != "" {
+		lines = append(lines, "")
+		wrapped := wrapText(s.FirstMsg, contentWidth)
+		for _, wl := range wrapped {
+			lines = append(lines, dimStyle.Render(wl))
+		}
+	}
+
 	content := strings.Join(lines, "\n")
 	styled := detailBorderStyle.Width(detailWidth).Render(content)
 	return styled
+}
+
+// wrapText wraps text to fit within maxWidth, respecting existing newlines.
+func wrapText(s string, maxWidth int) []string {
+	if maxWidth < 10 {
+		maxWidth = 10
+	}
+	var result []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		if paragraph == "" {
+			result = append(result, "")
+			continue
+		}
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			result = append(result, "")
+			continue
+		}
+		line := words[0]
+		for _, w := range words[1:] {
+			if len(line)+1+len(w) > maxWidth {
+				result = append(result, line)
+				line = w
+			} else {
+				line += " " + w
+			}
+		}
+		result = append(result, line)
+	}
+	return result
 }
 
 func formatSize(bytes int64) string {

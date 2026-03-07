@@ -115,6 +115,12 @@ func ParseSession(fpath string) (*types.Session, error) {
 		return nil, fmt.Errorf("scanning %s: %w", fpath, err)
 	}
 
+	// Full first message for detail pane (up to 500 chars, cleaned but not single-lined)
+	firstMsg := ""
+	if fallbackText != "" {
+		firstMsg = cleanFirstMsg(fallbackText)
+	}
+
 	// Resolve title
 	if title == "" {
 		if fallbackText != "" {
@@ -142,6 +148,7 @@ func ParseSession(fpath string) (*types.Session, error) {
 		ID:         sessionID,
 		ShortID:    shortID,
 		Title:      title,
+		FirstMsg:   firstMsg,
 		FilePath:   fpath,
 		FileSize:   info.Size(),
 		ContextPct: contextPct,
@@ -219,6 +226,27 @@ func cleanTitle(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 80 {
 		s = s[:80]
+	}
+	return s
+}
+
+// cleanFirstMsg returns a longer, multi-line version of the first message
+// for display in the detail pane. Strips HTML/markdown but preserves newlines.
+func cleanFirstMsg(s string) string {
+	s = stripHTML(s)
+	// Strip markdown heading markers
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = mdHeadingRe.ReplaceAllString(line, "")
+	}
+	s = strings.Join(lines, "\n")
+	// Strip bold markers
+	s = mdBoldRe.ReplaceAllString(s, "$1")
+	s = strings.ReplaceAll(s, "*", "")
+	s = strings.ReplaceAll(s, "__", "")
+	s = strings.TrimSpace(s)
+	if len(s) > 500 {
+		s = s[:500]
 	}
 	return s
 }
