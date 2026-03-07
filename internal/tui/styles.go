@@ -34,16 +34,21 @@ var (
 	numStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 
-	// Selected item
+	// Selected item (full row highlight)
 	selectedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("255")).
 			Background(lipgloss.Color("236"))
 
+	// Selection cursor arrow
+	cursorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("99")).
+			Bold(true)
+
 	// Normal item text
 	normalStyle = lipgloss.NewStyle()
 
-	// Project name
+	// Project name in session list
 	projectStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("75"))
 
@@ -83,6 +88,18 @@ var (
 	// Filter prompt
 	filterPromptStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("99"))
+
+	// Session detail pane
+	detailBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("63")).
+				Padding(0, 1)
+
+	detailLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
+
+	detailValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252"))
 
 	// Help overlay
 	helpStyle = lipgloss.NewStyle().

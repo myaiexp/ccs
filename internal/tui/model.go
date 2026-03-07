@@ -535,6 +535,9 @@ func gridPosition(grid [][]int, idx int) (int, int) {
 	return 0, 0
 }
 
+// detailPaneHeight is the fixed height consumed by the detail pane (border + content lines).
+const detailPaneHeight = 7
+
 // View renders the full TUI.
 func (m Model) View() string {
 	if m.launching {
@@ -558,12 +561,17 @@ func (m Model) View() string {
 	header += sortIndicator
 	sections = append(sections, header)
 
-	// Sessions
-	sessHeader := sectionStyle.Render("SESSIONS")
+	// Sessions header
+	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
+	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
 	sections = append(sections, sessHeader)
 
-	// Calculate how many sessions we can show
-	maxSessions := availHeight - 9
+	// Reserve space: header(1) + sess header(2) + detail(7) + proj header(2) + proj rows(~3) + footer(2) + border(2)
+	overhead := 19
+	if m.focus != FocusSessions {
+		overhead -= detailPaneHeight // no detail pane when projects focused
+	}
+	maxSessions := availHeight - overhead
 	if maxSessions < 3 {
 		maxSessions = 3
 	}
@@ -589,6 +597,16 @@ func (m Model) View() string {
 			s := m.filtered[i]
 			sections = append(sections, m.renderSession(i, s))
 		}
+		// Scroll indicator
+		if len(m.filtered) > maxSessions {
+			indicator := dimStyle.Render(fmt.Sprintf("  ── %d/%d ──", m.sessionIdx+1, len(m.filtered)))
+			sections = append(sections, indicator)
+		}
+	}
+
+	// Detail pane (only when sessions focused and have selection)
+	if m.focus == FocusSessions && len(m.filtered) > 0 {
+		sections = append(sections, m.renderDetail(m.filtered[m.sessionIdx]))
 	}
 
 	// Projects
@@ -622,10 +640,16 @@ func (m Model) View() string {
 }
 
 func (m Model) renderSession(idx int, s types.Session) string {
-	// Dot
-	dot := inactiveDot
-	if s.IsActive {
-		dot = activeDot
+	isSelected := m.focus == FocusSessions && idx == m.sessionIdx
+
+	// Cursor / dot
+	var prefix string
+	if isSelected {
+		prefix = cursorStyle.Render("▸")
+	} else if s.IsActive {
+		prefix = activeDot
+	} else {
+		prefix = inactiveDot
 	}
 
 	// Number (1-indexed)
@@ -639,7 +663,7 @@ func (m Model) renderSession(idx int, s types.Session) string {
 
 	// Title (truncate)
 	title := s.Title
-	maxTitle := m.width - 40
+	maxTitle := m.width - 36
 	if maxTitle < 20 {
 		maxTitle = 20
 	}
@@ -653,22 +677,71 @@ func (m Model) renderSession(idx int, s types.Session) string {
 	// Time
 	timeStr := dimStyle.Render(formatDuration(s.LastActive))
 
-	// Hidden indicator
-	hiddenMark := ""
+	line := fmt.Sprintf("%s %s %-14s  %-*s  %4s %s",
+		prefix, num, projName, maxTitle, title, ctxStr, timeStr)
+
+	if isSelected {
+		return selectedStyle.Render(line)
+	}
+	return line
+}
+
+func (m Model) renderDetail(s types.Session) string {
+	detailWidth := m.width - 6 // account for outer border + detail border + padding
+	if detailWidth < 40 {
+		detailWidth = 40
+	}
+
+	// Status
+	status := dimStyle.Render("○ inactive")
+	if s.IsActive {
+		status = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("● active")
+	}
+
+	// Hidden?
+	hidden := ""
 	for _, id := range m.config.HiddenSessions {
 		if id == s.ID {
-			hiddenMark = dimStyle.Render(" [hidden]")
+			hidden = dimStyle.Render("  [hidden]")
 			break
 		}
 	}
 
-	line := fmt.Sprintf("%s %s %-14s  %-*s  %4s %s%s",
-		dot, num, projName, maxTitle, title, ctxStr, timeStr, hiddenMark)
-
-	if m.focus == FocusSessions && idx == m.sessionIdx {
-		return selectedStyle.Render(line)
+	// Full title (wrap to width)
+	fullTitle := s.Title
+	if len(fullTitle) > detailWidth {
+		fullTitle = fullTitle[:detailWidth-1] + "…"
 	}
-	return line
+
+	// File size
+	sizeStr := formatSize(s.FileSize)
+
+	lines := []string{
+		detailValueStyle.Render(fullTitle),
+		"",
+		detailLabelStyle.Render("Project ") + detailValueStyle.Render(s.ProjectName) +
+			dimStyle.Render("  "+s.ProjectDir),
+		detailLabelStyle.Render("Context ") + contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct)) +
+			detailLabelStyle.Render("  Messages ") + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) +
+			detailLabelStyle.Render("  Size ") + detailValueStyle.Render(sizeStr) +
+			"  " + status + hidden,
+		detailLabelStyle.Render("ID ") + dimStyle.Render(s.ID),
+	}
+
+	content := strings.Join(lines, "\n")
+	styled := detailBorderStyle.Width(detailWidth).Render(content)
+	return styled
+}
+
+func formatSize(bytes int64) string {
+	switch {
+	case bytes >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	case bytes >= 1024:
+		return fmt.Sprintf("%.0f KB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
 
 func (m Model) renderProjects() string {
