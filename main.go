@@ -27,6 +27,9 @@ func main() {
 	}
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
+	// Auto-cleanup: remove tiny session files
+	session.Cleanup(projectsDir)
+
 	sessions, err := session.DiscoverSessions(projectsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error discovering sessions: %v\n", err)
@@ -38,9 +41,6 @@ func main() {
 	// Mark active sessions
 	for i := range sessions {
 		s := &sessions[i]
-		encoded := "-" + filepath.ToSlash(s.ProjectDir)
-		encoded = filepath.Clean(encoded)
-		// Re-encode: the active detection uses path-to-encoded
 		for dir := range activeDirs {
 			_, absPath := session.DecodeProjectDir(dir)
 			if absPath == s.ProjectDir {

@@ -43,6 +43,8 @@ type Model struct {
 	filtering    bool
 	showHidden   bool
 	showHelp     bool
+	confirming   bool
+	confirmSess  *types.Session
 	width        int
 	height       int
 	launching    bool
@@ -147,6 +149,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Delete confirmation
+	if m.confirming {
+		switch key {
+		case "y":
+			if m.confirmSess != nil {
+				// Delete the JSONL and subagents dir
+				os.Remove(m.confirmSess.FilePath)
+				subagentsDir := strings.TrimSuffix(m.confirmSess.FilePath, ".jsonl")
+				os.RemoveAll(subagentsDir)
+				m.confirming = false
+				m.confirmSess = nil
+				return m, refreshCmd()
+			}
+		case "n", "esc":
+			m.confirming = false
+			m.confirmSess = nil
+		}
+		return m, nil
+	}
+
 	// Number shortcuts for sessions
 	if key >= "1" && key <= "9" {
 		idx := int(key[0]-'0') - 1
@@ -184,7 +206,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "d":
-		// Placeholder for Task 8
+		if m.focus == FocusSessions && len(m.filtered) > 0 {
+			sess := m.filtered[m.sessionIdx]
+			m.confirming = true
+			m.confirmSess = &sess
+		}
 		return m, nil
 
 	case "h":
@@ -379,8 +405,21 @@ func (m Model) View() string {
 	sections = append(sections, projHeader)
 	sections = append(sections, m.renderProjects())
 
-	// Footer
-	sections = append(sections, m.renderFooter())
+	// Footer / confirmation
+	if m.confirming && m.confirmSess != nil {
+		title := m.confirmSess.Title
+		if len(title) > 40 {
+			title = title[:39] + "…"
+		}
+		confirm := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true).
+			MarginTop(1).
+			Render(fmt.Sprintf("Delete \"%s\"? [y/n]", title))
+		sections = append(sections, confirm)
+	} else {
+		sections = append(sections, m.renderFooter())
+	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 
