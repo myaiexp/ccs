@@ -320,6 +320,41 @@ func writeTestSession(t *testing.T, fpath string, sessionID string, targetSize i
 	}
 }
 
+func TestCleanTitle(t *testing.T) {
+	long := ""
+	for i := 0; i < 100; i++ {
+		long += "x"
+	}
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain text", "Hello world", "Hello world"},
+		{"h1 heading", "# My Heading", "My Heading"},
+		{"h2 heading", "## Sub heading", "Sub heading"},
+		{"bold text", "**bold text**", "bold text"},
+		{"bold with trailing", "**Goal:** Build something", "Goal: Build something"},
+		{"multi-line", "first line\nsecond line", "first line"},
+		{"list item", "- list item", "list item"},
+		{"quoted text", "> quoted text", "quoted text"},
+		{"html tags", "<b>hello</b>", "hello"},
+		{"long string truncated to 80", long, long[:80]},
+		{"real heading with em dash", "# PoE Hub Integration — Implementation Plan", "PoE Hub Integration — Implementation Plan"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cleanTitle(tt.input)
+			if got != tt.want {
+				t.Errorf("cleanTitle(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDiscoverSessions_RealFiles(t *testing.T) {
 	projectsDir := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
 	if _, err := os.Stat(projectsDir); os.IsNotExist(err) {
