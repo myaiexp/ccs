@@ -25,9 +25,10 @@ type Project struct {
 }
 
 type Config struct {
-	HiddenProjects []string `toml:"hidden_projects"`
-	HiddenSessions []string `toml:"hidden_sessions"`
-	ClaudeFlags    []string `toml:"claude_flags"`
+	HiddenProjects  []string `toml:"hidden_projects"`
+	HiddenSessions  []string `toml:"hidden_sessions"`
+	ClaudeFlags     []string `toml:"claude_flags"`
+	RelativeNumbers bool     `toml:"relative_numbers"`
 }
 
 // SortField determines which field to sort by.

@@ -45,6 +45,8 @@ type Model struct {
 	filtering    bool
 	showHidden   bool
 	showHelp     bool
+	showPrefs    bool
+	prefsIdx     int
 	confirming   bool
 	confirmSess  *types.Session
 	width        int
@@ -159,6 +161,30 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Preferences overlay
+	if m.showPrefs {
+		switch key {
+		case "j", "down":
+			// only one pref item for now, but ready for more
+			if m.prefsIdx < 0 {
+				m.prefsIdx = 0
+			}
+		case "k", "up":
+			if m.prefsIdx > 0 {
+				m.prefsIdx--
+			}
+		case "enter", " ":
+			switch m.prefsIdx {
+			case 0: // relative numbers
+				m.config.RelativeNumbers = !m.config.RelativeNumbers
+				config.Save(m.config)
+			}
+		case "esc", "p", "q":
+			m.showPrefs = false
+		}
+		return m, nil
+	}
+
 	// Delete confirmation
 	if m.confirming {
 		switch key {
@@ -178,24 +204,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Number shortcuts: 1-9 map to visible sessions in the scroll window.
-	// The numbers match the [N] labels rendered by View — window-local,
-	// skipping the selected/detail-pane session.
+	// Number shortcuts: 1-9 launch the Nth session in the sorted list.
 	if key >= "1" && key <= "9" {
-		n := int(key[0] - '0') // 1-indexed, matching the displayed [N]
-		start, end := m.scrollWindow()
-		visNum := 1
-		for i := start; i < end; i++ {
-			if m.focus == FocusSessions && i == m.sessionIdx {
-				continue // detail pane slot, not numbered
+		n := int(key[0] - '0')
+		idx := n - 1
+		if idx < len(m.filtered) {
+			sess := m.filtered[idx]
+			return m, func() tea.Msg {
+				return LaunchResumeMsg{Session: sess}
 			}
-			if visNum == n {
-				sess := m.filtered[i]
-				return m, func() tea.Msg {
-					return LaunchResumeMsg{Session: sess}
-				}
-			}
-			visNum++
 		}
 		return m, nil
 	}
@@ -262,6 +279,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "?":
 		m.showHelp = !m.showHelp
+		return m, nil
+
+	case "p":
+		m.showPrefs = !m.showPrefs
+		m.prefsIdx = 0
 		return m, nil
 
 	case "esc":
@@ -515,6 +537,7 @@ func (m *Model) scrollWindow() (int, int) {
 	return start, end
 }
 
+
 func filterVisibleProjects(projects []types.Project, showHidden bool) []types.Project {
 	if showHidden {
 		return projects
@@ -594,6 +617,10 @@ func (m Model) View() string {
 		return m.renderHelp()
 	}
 
+	if m.showPrefs {
+		return m.renderPrefs()
+	}
+
 	availHeight := m.height - 2 // outer border
 
 	var sections []string
@@ -652,14 +679,12 @@ func (m Model) View() string {
 	if len(m.filtered) == 0 {
 		sections = append(sections, dimStyle.Render("  no sessions"))
 	} else {
-		visNum := 1 // window-local number for shortcuts (1-9)
 		for i := start; i < end; i++ {
 			s := m.filtered[i]
 			if showDetail && i == m.sessionIdx {
 				sections = append(sections, m.renderDetail(s))
 			} else {
-				sections = append(sections, m.renderSession(visNum, s))
-				visNum++
+				sections = append(sections, m.renderSession(i+1, s))
 			}
 		}
 		// Scroll position indicator
@@ -710,8 +735,8 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		prefix = inactiveDot
 	}
 
-	// Window-local number
-	numStr := fmt.Sprintf("[%d]", visNum)
+	// Position number, right-aligned to 4 digits
+	numStr := fmt.Sprintf("%4d", visNum)
 	num := numStyle.Render(numStr)
 
 	// Project name (truncate if needed)
@@ -728,40 +753,56 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 
 	// Hidden label (only visible in show-hidden mode)
 	hiddenLabel := ""
-	hiddenWidth := 0
 	if m.showHidden {
 		for _, id := range m.config.HiddenSessions {
 			if id == s.ID {
 				hiddenLabel = dimStyle.Render("[hidden] ")
-				hiddenWidth = 9
 				break
 			}
 		}
 	}
 
-	// Calculate remaining width for title
-	fixedWidth := 1 + 1 + len(numStr) + 1 + 14 + 2 + 2 + hiddenWidth + len(ctxStr) + 1 + len(timeStr) + 4
-	maxTitle := m.width - fixedWidth
+	// Right side (ctx% + time) — build first so we know exact width
+	rightSide := contextStyle(s.ContextPct).Render(ctxStr) + " " + dimStyle.Render(timeStr)
+	if hiddenLabel != "" {
+		rightSide = hiddenLabel + rightSide
+	}
+	rightWidth := lipgloss.Width(rightSide)
+
+	// Left side fixed parts: dot(1) + space(1) + num(4) + space(1) + proj(14) + gap(2) = 23
+	leftFixed := 23
+	// Content area inside outer border: width - border(2) - padding(2) = width - 4
+	contentWidth := m.width - 4
+	// Title gets whatever space remains, minus gap(2) before right side
+	maxTitle := contentWidth - leftFixed - rightWidth - 2
 	if maxTitle < 10 {
 		maxTitle = 10
 	}
 
 	title := s.Title
-	if len(title) > maxTitle {
-		title = title[:maxTitle-1] + "…"
+	if lipgloss.Width(title) > maxTitle {
+		// Truncate by runes to handle multi-byte chars
+		for lipgloss.Width(title) > maxTitle-1 && len(title) > 0 {
+			title = title[:len(title)-1]
+		}
+		title += "…"
 	}
 
-	line := fmt.Sprintf("%s %s %-14s  %-*s  %s%s %s",
-		prefix, num, projName, maxTitle, title,
-		hiddenLabel,
-		contextStyle(s.ContextPct).Render(ctxStr),
-		dimStyle.Render(timeStr))
+	leftSide := fmt.Sprintf("%s %s %-14s  %s", prefix, num, projName, title)
+	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	line := leftSide + strings.Repeat(" ", gap) + rightSide
 
 	return line
 }
 
 func (m Model) renderDetail(s types.Session) string {
-	detailWidth := m.width - 6 // account for outer border + detail border + padding
+	// outer border(2)+padding(2) + detail border(2) = 6 for total rendered width
+	// detail padding(2) further reduces content area since Width() includes padding
+	detailWidth := m.width - 6 // passed to .Width() (includes detail padding)
+	contentWidth := detailWidth - 2 // actual text area (excludes detail padding)
 	if detailWidth < 40 {
 		detailWidth = 40
 	}
@@ -795,18 +836,21 @@ func (m Model) renderDetail(s types.Session) string {
 	projWidth := lipgloss.Width(projPart)
 
 	// Truncate title to leave room for right side (ctx% + time) with at least 2 gap chars
-	maxTitleWidth := detailWidth - projWidth - rightWidth - 2
-	title := s.Title
+	maxTitleWidth := contentWidth - projWidth - rightWidth - 2
 	if maxTitleWidth < 10 {
 		maxTitleWidth = 10
 	}
-	if len(title) > maxTitleWidth {
-		title = title[:maxTitleWidth-1] + "…"
+	title := s.Title
+	if lipgloss.Width(title) > maxTitleWidth {
+		for lipgloss.Width(title) > maxTitleWidth-1 && len(title) > 0 {
+			title = title[:len(title)-1]
+		}
+		title += "…"
 	}
-	leftSide := projPart + detailValueStyle.Render(title)
-	leftWidth := lipgloss.Width(leftSide)
+	titlePart := detailValueStyle.Render(title)
+	leftSide := projPart + titlePart
 
-	gap := detailWidth - leftWidth - rightWidth
+	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
 		gap = 1
 	}
@@ -908,7 +952,7 @@ func (m Model) renderFooter() string {
 	} else {
 		hints = append(hints, "h show hidden")
 	}
-	hints = append(hints, "? help", "q quit")
+	hints = append(hints, "p prefs", "? help", "q quit")
 	return footerStyle.Render(strings.Join(hints, "  "))
 }
 
@@ -928,11 +972,51 @@ func (m Model) renderHelp() string {
 		"  d           Delete session (with confirm)",
 		"  x           Hide/unhide session",
 		"  h           Toggle showing hidden items",
+		"  p           Preferences",
 		"  ?           Toggle this help",
 		"  q / ctrl+c  Quit",
 	}, "\n")
 
 	styled := helpStyle.Render(help)
+
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
+	}
+	return styled
+}
+
+func (m Model) renderPrefs() string {
+	type prefItem struct {
+		label   string
+		enabled bool
+	}
+	items := []prefItem{
+		{"Relative numbers (nvim-style)", m.config.RelativeNumbers},
+	}
+
+	lines := []string{
+		titleStyle.Render("Preferences"),
+		"",
+	}
+	for i, item := range items {
+		toggle := dimStyle.Render("[ ]")
+		if item.enabled {
+			toggle = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("[✓]")
+		}
+		label := item.label
+		cursor := "  "
+		if i == m.prefsIdx {
+			cursor = cursorStyle.Render("▸ ")
+			label = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Render(label)
+		} else {
+			label = dimStyle.Render(label)
+		}
+		lines = append(lines, fmt.Sprintf("  %s%s %s", cursor, toggle, label))
+	}
+	lines = append(lines, "", dimStyle.Render("  enter/space toggle  esc/p close"))
+
+	content := strings.Join(lines, "\n")
+	styled := helpStyle.Render(content)
 
 	if m.width > 0 && m.height > 0 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
