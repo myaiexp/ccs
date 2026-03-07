@@ -178,22 +178,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Number shortcuts: 1-9 map to visible sessions in the scroll window
+	// Number shortcuts: 1-9 map to visible sessions in the scroll window.
+	// The numbers match the [N] labels rendered by View — window-local,
+	// skipping the selected/detail-pane session.
 	if key >= "1" && key <= "9" {
-		n := int(key[0]-'0') - 1 // 0-indexed within visible window
+		n := int(key[0] - '0') // 1-indexed, matching the displayed [N]
 		start, end := m.scrollWindow()
-		// Skip the selected session (it's the detail pane, not numbered)
-		visibleIdx := 0
+		visNum := 1
 		for i := start; i < end; i++ {
 			if m.focus == FocusSessions && i == m.sessionIdx {
 				continue // detail pane slot, not numbered
 			}
-			if visibleIdx == n {
+			if visNum == n {
+				sess := m.filtered[i]
 				return m, func() tea.Msg {
-					return LaunchResumeMsg{Session: m.filtered[i]}
+					return LaunchResumeMsg{Session: sess}
 				}
 			}
-			visibleIdx++
+			visNum++
 		}
 		return m, nil
 	}
@@ -780,20 +782,30 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 
 	// Header line: project + title + right-aligned ctx% and time
-	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-	timeStr := dimStyle.Render(formatDuration(s.LastActive))
-	rightSide := ctxStr + " " + timeStr
+	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
+	timePart := dimStyle.Render(formatDuration(s.LastActive))
+	rightSide := ctxPart + " " + timePart
+	rightWidth := lipgloss.Width(rightSide)
 
 	projName := s.ProjectName
 	if len(projName) > 14 {
 		projName = projName[:13] + "…"
 	}
-	leftSide := detailValueStyle.Render(projName) + "  " +
-		detailValueStyle.Render(s.Title)
+	projPart := detailValueStyle.Render(projName) + "  "
+	projWidth := lipgloss.Width(projPart)
 
-	// Pad to push ctx%/time to the right edge
+	// Truncate title to leave room for right side (ctx% + time) with at least 2 gap chars
+	maxTitleWidth := detailWidth - projWidth - rightWidth - 2
+	title := s.Title
+	if maxTitleWidth < 10 {
+		maxTitleWidth = 10
+	}
+	if len(title) > maxTitleWidth {
+		title = title[:maxTitleWidth-1] + "…"
+	}
+	leftSide := projPart + detailValueStyle.Render(title)
 	leftWidth := lipgloss.Width(leftSide)
-	rightWidth := lipgloss.Width(rightSide)
+
 	gap := detailWidth - leftWidth - rightWidth
 	if gap < 1 {
 		gap = 1
