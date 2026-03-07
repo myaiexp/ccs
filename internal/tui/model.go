@@ -727,10 +727,28 @@ func (m Model) renderDetail(idx int, s types.Session) string {
 		}
 	}
 
-	// Header line: cursor + number + title (full, may wrap within the pane)
-	headerLine := cursorStyle.Render("▸") + " " +
-		numStyle.Render(fmt.Sprintf("[%d]", idx+1)) + " " +
+	// Header line: number + project + title + right-aligned ctx% and time
+	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
+	timeStr := dimStyle.Render(formatDuration(s.LastActive))
+	rightSide := ctxStr + " " + timeStr
+
+	numStr := fmt.Sprintf("[%d]", idx+1)
+	projName := s.ProjectName
+	if len(projName) > 14 {
+		projName = projName[:13] + "…"
+	}
+	leftSide := numStyle.Render(numStr) + " " +
+		detailValueStyle.Render(projName) + "  " +
 		detailValueStyle.Render(s.Title)
+
+	// Pad to push ctx%/time to the right edge
+	leftWidth := lipgloss.Width(leftSide)
+	rightWidth := lipgloss.Width(rightSide)
+	gap := detailWidth - leftWidth - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	headerLine := leftSide + strings.Repeat(" ", gap) + rightSide
 
 	// File size
 	sizeStr := formatSize(s.FileSize)
@@ -738,10 +756,8 @@ func (m Model) renderDetail(idx int, s types.Session) string {
 	lines := []string{
 		headerLine,
 		"",
-		detailLabelStyle.Render("Project ") + detailValueStyle.Render(s.ProjectName) +
-			dimStyle.Render("  "+s.ProjectDir),
-		detailLabelStyle.Render("Context ") + contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct)) +
-			detailLabelStyle.Render("  Messages ") + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) +
+		detailLabelStyle.Render("Project ") + dimStyle.Render(s.ProjectDir),
+		detailLabelStyle.Render("Messages ") + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) +
 			detailLabelStyle.Render("  Size ") + detailValueStyle.Render(sizeStr) +
 			"  " + status + hidden,
 		detailLabelStyle.Render("ID ") + dimStyle.Render(s.ID),
