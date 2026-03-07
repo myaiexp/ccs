@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"ccs/internal/types"
 )
@@ -221,16 +223,31 @@ func cleanTitle(s string) string {
 	return s
 }
 
+// sessionFile holds info needed to parse a session file.
+type sessionFile struct {
+	path     string
+	projName string
+	projPath string
+	modTime  time.Time
+	size     int64
+}
+
 // DiscoverSessions finds all session JSONL files in the given projects dir,
 // parses them, and returns sorted by LastActive descending.
 // Skips files in subagents/ dirs and files < 25KB.
+// Uses a file metadata cache to skip re-parsing unchanged files,
+// and parses uncached files in parallel.
 func DiscoverSessions(projectsDir string) ([]types.Session, error) {
 	projDirs, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading projects dir: %w", err)
 	}
 
-	var sessions []types.Session
+	cache := loadCache()
+
+	var cached []types.Session
+	var toParse []sessionFile
+	validPaths := make(map[string]bool)
 
 	for _, pd := range projDirs {
 		if !pd.IsDir() {
@@ -252,7 +269,6 @@ func DiscoverSessions(projectsDir string) ([]types.Session, error) {
 
 			fpath := filepath.Join(dirPath, entry.Name())
 
-			// Skip files in subagents
 			if strings.Contains(fpath, "/subagents/") {
 				continue
 			}
@@ -262,22 +278,86 @@ func DiscoverSessions(projectsDir string) ([]types.Session, error) {
 				continue
 			}
 
-			// Skip small files
 			if info.Size() < 25*1024 {
 				continue
 			}
 
-			sess, err := ParseSession(fpath)
-			if err != nil {
+			validPaths[fpath] = true
+
+			// Check cache
+			if sess, ok := cache.get(fpath, info.ModTime(), info.Size()); ok {
+				sess.ProjectName = projName
+				sess.ProjectDir = projPath
+				cached = append(cached, *sess)
 				continue
 			}
 
-			sess.ProjectName = projName
-			sess.ProjectDir = projPath
-
-			sessions = append(sessions, *sess)
+			toParse = append(toParse, sessionFile{
+				path:     fpath,
+				projName: projName,
+				projPath: projPath,
+				modTime:  info.ModTime(),
+				size:     info.Size(),
+			})
 		}
 	}
+
+	// Parse uncached files in parallel
+	type result struct {
+		sess types.Session
+		sf   sessionFile
+	}
+
+	workers := 8
+	if len(toParse) < workers {
+		workers = len(toParse)
+	}
+
+	jobs := make(chan sessionFile, len(toParse))
+	results := make(chan result, len(toParse))
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sf := range jobs {
+				sess, err := ParseSession(sf.path)
+				if err != nil {
+					continue
+				}
+				sess.ProjectName = sf.projName
+				sess.ProjectDir = sf.projPath
+				results <- result{sess: *sess, sf: sf}
+			}
+		}()
+	}
+
+	for _, sf := range toParse {
+		jobs <- sf
+	}
+	close(jobs)
+
+	// Close results channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	parsed := make([]types.Session, 0, len(toParse))
+	for r := range results {
+		cache.set(r.sf.path, r.sf.modTime, r.sf.size, &r.sess)
+		parsed = append(parsed, r.sess)
+	}
+
+	// Save cache (prunes deleted files)
+	cache.save(validPaths)
+
+	// Merge cached + parsed
+	sessions := make([]types.Session, 0, len(cached)+len(parsed))
+	sessions = append(sessions, cached...)
+	sessions = append(sessions, parsed...)
 
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].LastActive.After(sessions[j].LastActive)
