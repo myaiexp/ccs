@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,44 +162,90 @@ func (t *Tracker) OpenProjectDirs() map[string]bool {
 	return dirs
 }
 
-// MatchNewSession tries to match a tracked entry (PID with no session ID)
-// to a session that was created after the process started in the same project dir.
+// MatchNewSession tries to match tracked entries (PIDs without session IDs)
+// to sessions. For each unmatched tracked entry, finds the most recently
+// created session in the same project dir that was created after the process
+// started. Already-claimed session IDs are not reused.
 func (t *Tracker) MatchNewSession(sessions []types.Session) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	changed := false
+	// Collect session IDs already claimed by tracked entries
+	claimed := make(map[string]bool)
+	for _, ts := range t.Sessions {
+		if ts.SessionID != "" {
+			claimed[ts.SessionID] = true
+		}
+	}
+
+	// Group unmatched tracker entries by project dir
+	byDir := make(map[string][]int)
 	for i := range t.Sessions {
-		if t.Sessions[i].SessionID != "" {
-			continue
+		if t.Sessions[i].SessionID == "" {
+			byDir[t.Sessions[i].ProjectDir] = append(byDir[t.Sessions[i].ProjectDir], i)
 		}
-		// Find the session created closest after this process started
-		var bestIdx int = -1
-		var bestGap time.Duration = 2 * time.Minute
+	}
 
+	changed := false
+	for dir, indices := range byDir {
+		// Collect unclaimed sessions created after the earliest process in this dir
+		var earliest time.Time
+		for _, i := range indices {
+			if earliest.IsZero() || t.Sessions[i].StartedAt.Before(earliest) {
+				earliest = t.Sessions[i].StartedAt
+			}
+		}
+
+		var candidates []int
 		for j := range sessions {
-			if sessions[j].ProjectDir != t.Sessions[i].ProjectDir {
+			if sessions[j].ProjectDir != dir || claimed[sessions[j].ID] || sessions[j].CreatedAt.IsZero() {
 				continue
 			}
-			if sessions[j].CreatedAt.IsZero() {
+			if sessions[j].CreatedAt.Before(earliest.Add(-10 * time.Second)) {
 				continue
 			}
-			gap := sessions[j].CreatedAt.Sub(t.Sessions[i].StartedAt)
-			if gap < -10*time.Second || gap > 2*time.Minute {
-				continue
-			}
-			if gap < 0 {
-				gap = -gap
-			}
-			if gap < bestGap {
-				bestGap = gap
-				bestIdx = j
-			}
+			candidates = append(candidates, j)
 		}
 
-		if bestIdx >= 0 {
-			t.Sessions[i].SessionID = sessions[bestIdx].ID
-			changed = true
+		if len(indices) == 1 {
+			// Single process: pick most recently created session (handles compaction)
+			var bestIdx int = -1
+			var bestCreated time.Time
+			for _, j := range candidates {
+				if bestIdx == -1 || sessions[j].CreatedAt.After(bestCreated) {
+					bestCreated = sessions[j].CreatedAt
+					bestIdx = j
+				}
+			}
+			if bestIdx >= 0 {
+				t.Sessions[indices[0]].SessionID = sessions[bestIdx].ID
+				claimed[sessions[bestIdx].ID] = true
+				changed = true
+			}
+		} else {
+			// Multiple processes: sort both by time ascending and match 1:1
+			sort.Slice(indices, func(a, b int) bool {
+				return t.Sessions[indices[a]].StartedAt.Before(t.Sessions[indices[b]].StartedAt)
+			})
+			sort.Slice(candidates, func(a, b int) bool {
+				return sessions[candidates[a]].CreatedAt.Before(sessions[candidates[b]].CreatedAt)
+			})
+
+			ci := 0
+			for _, ti := range indices {
+				// Find the first unclaimed candidate created after this process started
+				for ci < len(candidates) {
+					j := candidates[ci]
+					ci++
+					if sessions[j].CreatedAt.Before(t.Sessions[ti].StartedAt.Add(-10 * time.Second)) {
+						continue
+					}
+					t.Sessions[ti].SessionID = sessions[j].ID
+					claimed[sessions[j].ID] = true
+					changed = true
+					break
+				}
+			}
 		}
 	}
 
