@@ -660,9 +660,45 @@ func (m *Model) detailPaneLines() int {
 		return 0
 	}
 	s := m.filtered[m.sessionIdx]
-	// Base: border(2) + header(1) + blank(1) + project(1) + stats(1) + id(1) = 7
+
+	entries := m.activities[s.ID]
+	usesTwoColumn := s.IsActive && len(entries) > 0
+
+	if usesTwoColumn {
+		// Two-column layout: height is max(left, right) + border(2)
+		contentWidth := m.width - 8
+		if contentWidth < 40 {
+			contentWidth = 40
+		}
+		leftWidth := contentWidth * 40 / 100
+		if leftWidth < 30 {
+			leftWidth = 30
+		}
+
+		// Left column: header(1) + blank(1) + project(1) + stats(1) + id(1) = 5 lines
+		leftLines := 5
+		if s.FirstMsg != "" {
+			msgLines := wrapText(s.FirstMsg, leftWidth)
+			leftLines += len(msgLines) + 1 // +1 for blank line
+		}
+
+		// Right column: "Activity" header(1) + blank(1) + entries
+		const defaultActivityLines = 5
+		actCount := defaultActivityLines
+		if actCount > len(entries) {
+			actCount = len(entries)
+		}
+		rightLines := 2 + actCount // header + blank + entries
+
+		contentLines := leftLines
+		if rightLines > contentLines {
+			contentLines = rightLines
+		}
+		return contentLines + 2 // +2 for border
+	}
+
+	// Single-column: border(2) + header(1) + blank(1) + project(1) + stats(1) + id(1) = 7
 	base := 7
-	// Add wrapped first message lines
 	if s.FirstMsg != "" {
 		contentWidth := m.width - 8 // outer border(2) + padding(2) + detail border(2) + detail padding(2)
 		if contentWidth < 40 {
@@ -889,10 +925,15 @@ func (m Model) renderDetail(s types.Session) string {
 		contentWidth = 38
 	}
 
-	// Status
-	status := dimStyle.Render("○ inactive")
-	if s.IsActive {
-		status = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("● active")
+	// Status with three-state dot
+	var status string
+	switch s.ActiveSource {
+	case types.SourceTmux:
+		status = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("● active (tmux)")
+	case types.SourceProc:
+		status = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("● active (external)")
+	default:
+		status = dimStyle.Render("○ inactive")
 	}
 
 	// Hidden?
@@ -941,7 +982,7 @@ func (m Model) renderDetail(s types.Session) string {
 	// File size
 	sizeStr := formatSize(s.FileSize)
 
-	lines := []string{
+	infoLines := []string{
 		headerLine,
 		"",
 		detailLabelStyle.Render("Project ") + dimStyle.Render(s.ProjectDir),
@@ -952,15 +993,66 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 
 	// Full first message, word-wrapped
+	entries := m.activities[s.ID]
+	usesTwoColumn := s.IsActive && len(entries) > 0
+
+	if usesTwoColumn {
+		// Two-column layout: left (~40%) = info + first message, right (~60%) = activity log
+		leftWidth := contentWidth * 40 / 100
+		rightColWidth := contentWidth - leftWidth - 2 // 2 for gap between columns
+		if leftWidth < 30 {
+			leftWidth = 30
+		}
+		if rightColWidth < 20 {
+			rightColWidth = 20
+		}
+
+		// Left column: info lines + first message
+		var leftLines []string
+		leftLines = append(leftLines, infoLines...)
+		if s.FirstMsg != "" {
+			leftLines = append(leftLines, "")
+			wrapped := wrapText(s.FirstMsg, leftWidth)
+			for _, wl := range wrapped {
+				leftLines = append(leftLines, dimStyle.Render(wl))
+			}
+		}
+
+		// Right column: activity log
+		const defaultActivityLines = 5
+		maxEntries := defaultActivityLines
+		if maxEntries > len(entries) {
+			maxEntries = len(entries)
+		}
+		var rightLines []string
+		rightLines = append(rightLines, detailLabelStyle.Render("Activity"))
+		rightLines = append(rightLines, "")
+		for i := 0; i < maxEntries; i++ {
+			rightLines = append(rightLines, activityStyle.Render(activity.FormatEntry(entries[i])))
+		}
+
+		// Pad shorter column to match heights
+		leftContent := strings.Join(leftLines, "\n")
+		rightContent := strings.Join(rightLines, "\n")
+
+		leftCol := lipgloss.NewStyle().Width(leftWidth).Render(leftContent)
+		rightCol := lipgloss.NewStyle().Width(rightColWidth).Render(rightContent)
+
+		content := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "  ", rightCol)
+		styled := detailBorderStyle.Width(detailWidth).Render(content)
+		return styled
+	}
+
+	// Single-column layout (inactive or no activity entries)
 	if s.FirstMsg != "" {
-		lines = append(lines, "")
+		infoLines = append(infoLines, "")
 		wrapped := wrapText(s.FirstMsg, contentWidth)
 		for _, wl := range wrapped {
-			lines = append(lines, dimStyle.Render(wl))
+			infoLines = append(infoLines, dimStyle.Render(wl))
 		}
 	}
 
-	content := strings.Join(lines, "\n")
+	content := strings.Join(infoLines, "\n")
 	styled := detailBorderStyle.Width(detailWidth).Render(content)
 	return styled
 }
