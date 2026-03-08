@@ -10,15 +10,17 @@ import (
 	"sync"
 	"time"
 
+	"ccs/internal/tmux"
 	"ccs/internal/types"
 )
 
 // TrackedSession represents a session launched from ccs.
 type TrackedSession struct {
-	SessionID  string    `json:"session_id,omitempty"` // empty for new sessions
-	ProjectDir string    `json:"project_dir"`
-	PID        int       `json:"pid"`
-	StartedAt  time.Time `json:"started_at"`
+	SessionID    string    `json:"session_id,omitempty"` // empty for new sessions
+	ProjectDir   string    `json:"project_dir"`
+	PID          int       `json:"pid"`
+	StartedAt    time.Time `json:"started_at"`
+	TmuxWindowID string    `json:"tmux_window_id,omitempty"`
 }
 
 // Tracker manages the state of sessions launched from ccs.
@@ -162,6 +164,48 @@ func (t *Tracker) OpenProjectDirs() map[string]bool {
 	return dirs
 }
 
+// FindBySessionID returns the tracked session with the given ID, if any.
+func (t *Tracker) FindBySessionID(id string) (TrackedSession, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for _, s := range t.Sessions {
+		if s.SessionID == id {
+			return s, true
+		}
+	}
+	return TrackedSession{}, false
+}
+
+// TmuxWindowIDs returns a map of session ID → tmux window ID
+// for all tracked sessions that have a tmux window.
+func (t *Tracker) TmuxWindowIDs() map[string]string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	ids := make(map[string]string)
+	for _, s := range t.Sessions {
+		if s.SessionID != "" && s.TmuxWindowID != "" {
+			ids[s.SessionID] = s.TmuxWindowID
+		}
+	}
+	return ids
+}
+
+// SetTmuxWindow sets the tmux window ID for a tracked session.
+func (t *Tracker) SetTmuxWindow(sessionID, windowID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i := range t.Sessions {
+		if t.Sessions[i].SessionID == sessionID {
+			t.Sessions[i].TmuxWindowID = windowID
+			t.save()
+			return
+		}
+	}
+}
+
 // MatchNewSession tries to match tracked entries (PIDs without session IDs)
 // to sessions. For each unmatched tracked entry, finds the most recently
 // created session in the same project dir that was created after the process
@@ -254,11 +298,16 @@ func (t *Tracker) MatchNewSession(sessions []types.Session) {
 	}
 }
 
-// prune removes entries for processes that are no longer running.
+// prune removes entries for processes that are no longer running
+// and clears tmux window IDs for windows that no longer exist.
 func (t *Tracker) prune() {
 	alive := t.Sessions[:0]
 	for _, s := range t.Sessions {
 		if processAlive(s.PID) {
+			// Clear tmux window ID if the window no longer exists
+			if s.TmuxWindowID != "" && !tmux.WindowExists(s.TmuxWindowID) {
+				s.TmuxWindowID = ""
+			}
 			alive = append(alive, s)
 		}
 	}

@@ -46,6 +46,54 @@ func TestTracker_OpenProjectDirs(t *testing.T) {
 	}
 }
 
+func TestTracker_FindBySessionID(t *testing.T) {
+	tracker := &Tracker{path: "/dev/null"}
+	tracker.Track("sess-1", "/proj/a", os.Getpid())
+	tracker.Track("sess-2", "/proj/b", os.Getpid())
+
+	ts, ok := tracker.FindBySessionID("sess-1")
+	if !ok {
+		t.Fatal("expected to find sess-1")
+	}
+	if ts.ProjectDir != "/proj/a" {
+		t.Errorf("expected /proj/a, got %s", ts.ProjectDir)
+	}
+
+	_, ok = tracker.FindBySessionID("nonexistent")
+	if ok {
+		t.Error("should not find nonexistent session")
+	}
+}
+
+func TestTracker_TmuxWindowIDs(t *testing.T) {
+	tracker := &Tracker{path: "/dev/null"}
+	tracker.Track("sess-1", "/proj/a", os.Getpid())
+	tracker.Track("sess-2", "/proj/b", os.Getpid())
+	tracker.SetTmuxWindow("sess-1", "@1")
+
+	ids := tracker.TmuxWindowIDs()
+	if ids["sess-1"] != "@1" {
+		t.Errorf("expected @1 for sess-1, got %q", ids["sess-1"])
+	}
+	if _, ok := ids["sess-2"]; ok {
+		t.Error("sess-2 should not have a tmux window ID")
+	}
+}
+
+func TestTracker_SetTmuxWindow(t *testing.T) {
+	tracker := &Tracker{path: "/dev/null"}
+	tracker.Track("sess-1", "/proj/a", os.Getpid())
+	tracker.SetTmuxWindow("sess-1", "@5")
+
+	ts, ok := tracker.FindBySessionID("sess-1")
+	if !ok {
+		t.Fatal("expected to find sess-1")
+	}
+	if ts.TmuxWindowID != "@5" {
+		t.Errorf("expected @5, got %q", ts.TmuxWindowID)
+	}
+}
+
 func TestTracker_MatchNewSession(t *testing.T) {
 	now := time.Now()
 	tracker := &Tracker{path: "/dev/null"}

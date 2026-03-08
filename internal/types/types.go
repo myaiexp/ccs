@@ -2,20 +2,30 @@ package types
 
 import "time"
 
+// ActiveSource indicates how an active session was detected.
+type ActiveSource int
+
+const (
+	SourceInactive ActiveSource = iota
+	SourceProc                  // found via /proc, no tmux window
+	SourceTmux                  // launched from ccs, has tmux window
+)
+
 type Session struct {
-	ID          string
-	ShortID     string
-	ProjectName string
-	ProjectDir  string
-	Title       string
-	FirstMsg    string // Full first user message (up to 500 chars, for detail pane)
-	ContextPct  int
-	MsgCount    int
-	FileSize    int64
-	CreatedAt   time.Time
-	LastActive  time.Time
-	IsActive    bool
-	FilePath    string
+	ID           string
+	ShortID      string
+	ProjectName  string
+	ProjectDir   string
+	Title        string
+	FirstMsg     string // Full first user message (up to 500 chars, for detail pane)
+	ContextPct   int
+	MsgCount     int
+	FileSize     int64
+	CreatedAt    time.Time
+	LastActive   time.Time
+	IsActive     bool
+	ActiveSource ActiveSource
+	FilePath     string
 }
 
 type Project struct {
