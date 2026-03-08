@@ -19,6 +19,7 @@ import (
 	"ccs/internal/session"
 	"ccs/internal/tmux"
 	"ccs/internal/types"
+	"ccs/internal/watcher"
 )
 
 // Focus tracks which section has focus.
@@ -33,6 +34,11 @@ const (
 type LaunchResumeMsg struct{ Session types.Session }
 type LaunchNewMsg struct{ Project types.Project }
 type RefreshMsg struct{}
+type ActivityUpdateMsg struct {
+	SessionID string
+	Entries   []activity.Entry
+}
+type TickMsg struct{}
 
 type Model struct {
 	sessions     []types.Session
@@ -58,10 +64,11 @@ type Model struct {
 	sortField    types.SortField
 	sortDir      types.SortDir
 	tracker      *session.Tracker
+	watcher      *watcher.Watcher
 	activities   map[string][]activity.Entry // sessionID -> recent entries
 }
 
-func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker) Model {
+func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker, w *watcher.Watcher) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.Prompt = "/ "
@@ -84,6 +91,7 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 		sortField:    types.SortByTime,
 		sortDir:      types.SortDesc,
 		tracker:      tracker,
+		watcher:      w,
 		activities:   make(map[string][]activity.Entry),
 	}
 	m.applyFilter()
@@ -92,7 +100,21 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	cmds := []tea.Cmd{tickCmd()}
+
+	if m.watcher != nil {
+		go m.watcher.Run()
+		cmds = append(cmds, watchCmd(m.watcher))
+
+		// Watch all currently-active sessions
+		for _, s := range m.sessions {
+			if s.IsActive && s.FilePath != "" {
+				_ = m.watcher.Watch(s.ID, s.FilePath)
+			}
+		}
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -119,6 +141,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TmuxSwitchDoneMsg:
 		return m, nil
+
+	case ActivityUpdateMsg:
+		m.activities[msg.SessionID] = msg.Entries
+		if m.watcher != nil {
+			return m, watchCmd(m.watcher)
+		}
+		return m, nil
+
+	case TickMsg:
+		cmd := m.handleRefresh()
+		return m, tea.Batch(cmd, tickCmd())
 
 	case RefreshMsg:
 		return m, m.handleRefresh()
@@ -1243,6 +1276,25 @@ func refreshCmd() tea.Cmd {
 	}
 }
 
+func tickCmd() tea.Cmd {
+	return tea.Tick(10*time.Second, func(time.Time) tea.Msg {
+		return TickMsg{}
+	})
+}
+
+func watchCmd(w *watcher.Watcher) tea.Cmd {
+	return func() tea.Msg {
+		update, ok := <-w.Updates()
+		if !ok {
+			return nil
+		}
+		return ActivityUpdateMsg{
+			SessionID: update.SessionID,
+			Entries:   update.Entries,
+		}
+	}
+}
+
 func (m *Model) handleRefresh() tea.Cmd {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1259,11 +1311,49 @@ func (m *Model) handleRefresh() tea.Cmd {
 	m.tracker.Refresh()
 	m.tracker.MatchNewSession(sessions)
 
-	// Mark sessions as open based on tracker
+	// Mark sessions as open based on tracker, with ActiveSource
 	openIDs := m.tracker.OpenSessionIDs()
+	tmuxWindows := m.tracker.TmuxWindowIDs()
 	for i := range sessions {
 		if openIDs[sessions[i].ID] {
 			sessions[i].IsActive = true
+			if _, hasTmux := tmuxWindows[sessions[i].ID]; hasTmux {
+				sessions[i].ActiveSource = types.SourceTmux
+			} else {
+				sessions[i].ActiveSource = types.SourceProc
+			}
+		}
+	}
+
+	// Diff active sessions to update watcher
+	if m.watcher != nil {
+		// Build new active set
+		newActive := make(map[string]string) // sessionID → filePath
+		for _, s := range sessions {
+			if s.IsActive && s.FilePath != "" {
+				newActive[s.ID] = s.FilePath
+			}
+		}
+
+		// Build old active set
+		oldActive := make(map[string]string)
+		for _, s := range m.sessions {
+			if s.IsActive && s.FilePath != "" {
+				oldActive[s.ID] = s.FilePath
+			}
+		}
+
+		// Watch newly-active, unwatch newly-inactive
+		for id, path := range newActive {
+			if _, was := oldActive[id]; !was {
+				_ = m.watcher.Watch(id, path)
+			}
+		}
+		for id, path := range oldActive {
+			if _, is := newActive[id]; !is {
+				m.watcher.Unwatch(path)
+				delete(m.activities, id)
+			}
 		}
 	}
 

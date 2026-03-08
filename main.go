@@ -11,6 +11,8 @@ import (
 	"ccs/internal/project"
 	"ccs/internal/session"
 	"ccs/internal/tui"
+	"ccs/internal/types"
+	"ccs/internal/watcher"
 )
 
 func main() {
@@ -38,16 +40,33 @@ func main() {
 	tracker.Refresh()
 	tracker.MatchNewSession(sessions)
 
-	// Mark sessions as open based on tracker
+	// Mark sessions as open based on tracker, with ActiveSource
 	openIDs := tracker.OpenSessionIDs()
+	tmuxWindows := tracker.TmuxWindowIDs()
 	for i := range sessions {
 		if openIDs[sessions[i].ID] {
 			sessions[i].IsActive = true
+			if _, hasTmux := tmuxWindows[sessions[i].ID]; hasTmux {
+				sessions[i].ActiveSource = types.SourceTmux
+			} else {
+				sessions[i].ActiveSource = types.SourceProc
+			}
 		}
 	}
 
+	// Create file watcher for activity monitoring
+	const defaultActivityLines = 5
+	w, err := watcher.New(defaultActivityLines)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create watcher: %v\n", err)
+		w = nil
+	}
+	if w != nil {
+		defer w.Close()
+	}
+
 	projects := project.DiscoverProjects(sessions, cfg)
-	model := tui.New(sessions, projects, cfg, tracker)
+	model := tui.New(sessions, projects, cfg, tracker, w)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
