@@ -82,13 +82,3 @@ func (d SortDir) String() string {
 	}
 	return "↓"
 }
-
-// ProjectActiveInfo holds detection results for a single project directory.
-type ProjectActiveInfo struct {
-	ProcessStarts []time.Time // start time of each running claude process
-}
-
-// ActiveInfo holds the results of active session detection.
-type ActiveInfo struct {
-	ProjectDirs map[string]ProjectActiveInfo // key: absolute project dir path
-}

@@ -54,9 +54,10 @@ type Model struct {
 	launching    bool
 	sortField    types.SortField
 	sortDir      types.SortDir
+	tracker      *session.Tracker
 }
 
-func New(sessions []types.Session, projects []types.Project, cfg *types.Config) Model {
+func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.Prompt = "/ "
@@ -77,6 +78,7 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config) 
 		focus:        FocusSessions,
 		sortField:    types.SortByTime,
 		sortDir:      types.SortDesc,
+		tracker:      tracker,
 	}
 	m.applyFilter()
 
@@ -96,11 +98,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LaunchResumeMsg:
 		m.launching = true
-		return m, LaunchResume(msg.Session, m.config.ClaudeFlags)
+		return m, LaunchResume(msg.Session, m.config.ClaudeFlags, m.tracker)
 
 	case LaunchNewMsg:
 		m.launching = true
-		return m, LaunchNew(msg.Project, m.config.ClaudeFlags)
+		return m, LaunchNew(msg.Project, m.config.ClaudeFlags, m.tracker)
 
 	case ExecFinishedMsg:
 		m.launching = false
@@ -1102,8 +1104,17 @@ func (m *Model) handleRefresh() tea.Cmd {
 		return nil
 	}
 
-	active := session.DetectActive()
-	session.MarkActiveSessions(sessions, active)
+	// Refresh tracker: prune dead PIDs, seed from /proc
+	m.tracker.Refresh()
+	m.tracker.MatchNewSession(sessions)
+
+	// Mark sessions as open based on tracker
+	openIDs := m.tracker.OpenSessionIDs()
+	for i := range sessions {
+		if openIDs[sessions[i].ID] {
+			sessions[i].IsActive = true
+		}
+	}
 
 	m.sessions = sessions
 	m.projects = project.DiscoverProjects(sessions, m.config)

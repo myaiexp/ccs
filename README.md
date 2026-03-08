@@ -32,6 +32,10 @@ ccs
 
 Press `?` for keybindings.
 
+## Known Limitations
+
+**Active session detection** — ccs tracks which sessions it launches and marks them as "open" (green dot). Sessions launched outside of ccs (e.g., running `claude` directly in a terminal) are detected via `/proc` scanning on startup, but only if they were started with `--resume <id>`. Sessions started without `--resume` outside of ccs won't be tracked.
+
 ## License
 
 MIT

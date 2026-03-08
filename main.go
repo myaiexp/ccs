@@ -27,20 +27,27 @@ func main() {
 	}
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
-	// Auto-cleanup: remove tiny session files
-	session.Cleanup(projectsDir)
-
 	sessions, err := session.DiscoverSessions(projectsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error discovering sessions: %v\n", err)
 		os.Exit(1)
 	}
 
-	active := session.DetectActive()
-	session.MarkActiveSessions(sessions, active)
+	// Load tracker, prune dead PIDs, seed from /proc
+	tracker := session.LoadTracker()
+	tracker.Refresh()
+	tracker.MatchNewSession(sessions)
+
+	// Mark sessions as open based on tracker
+	openIDs := tracker.OpenSessionIDs()
+	for i := range sessions {
+		if openIDs[sessions[i].ID] {
+			sessions[i].IsActive = true
+		}
+	}
 
 	projects := project.DiscoverProjects(sessions, cfg)
-	model := tui.New(sessions, projects, cfg)
+	model := tui.New(sessions, projects, cfg, tracker)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
