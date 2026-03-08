@@ -19,6 +19,7 @@ import (
 type jsonLine struct {
 	Type      string      `json:"type"`
 	SessionID string      `json:"sessionId"`
+	Timestamp string      `json:"timestamp"`
 	IsMeta    bool        `json:"isMeta"`
 	Subtype   string      `json:"subtype"`
 	Message   jsonMessage `json:"message"`
@@ -64,6 +65,7 @@ func ParseSession(fpath string) (*types.Session, error) {
 		fallbackText string
 		msgCount     int
 		lastUsage    *jsonUsage
+		createdAt    time.Time
 	)
 
 	scanner := bufio.NewScanner(f)
@@ -79,6 +81,12 @@ func ParseSession(fpath string) (*types.Session, error) {
 
 		if sessionID == "" && entry.SessionID != "" {
 			sessionID = entry.SessionID
+		}
+
+		if createdAt.IsZero() && entry.Timestamp != "" {
+			if t, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil {
+				createdAt = t
+			}
 		}
 
 		switch entry.Type {
@@ -153,6 +161,7 @@ func ParseSession(fpath string) (*types.Session, error) {
 		FileSize:   info.Size(),
 		ContextPct: contextPct,
 		MsgCount:   msgCount,
+		CreatedAt:  createdAt,
 		LastActive: info.ModTime(),
 	}, nil
 }

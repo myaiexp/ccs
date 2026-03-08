@@ -12,6 +12,7 @@ type Session struct {
 	ContextPct  int
 	MsgCount    int
 	FileSize    int64
+	CreatedAt   time.Time
 	LastActive  time.Time
 	IsActive    bool
 	FilePath    string
@@ -84,8 +85,7 @@ func (d SortDir) String() string {
 
 // ProjectActiveInfo holds detection results for a single project directory.
 type ProjectActiveInfo struct {
-	Count         int       // number of running claude processes
-	EarliestStart time.Time // earliest process start time
+	ProcessStarts []time.Time // start time of each running claude process
 }
 
 // ActiveInfo holds the results of active session detection.

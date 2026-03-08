@@ -70,10 +70,7 @@ func DetectActive() types.ActiveInfo {
 
 		// Accumulate per-project-dir
 		existing := info.ProjectDirs[cwd]
-		existing.Count++
-		if existing.EarliestStart.IsZero() || startTime.Before(existing.EarliestStart) {
-			existing.EarliestStart = startTime
-		}
+		existing.ProcessStarts = append(existing.ProcessStarts, startTime)
 		info.ProjectDirs[cwd] = existing
 	}
 
