@@ -7,7 +7,7 @@ import (
 )
 
 func TestDiscoverProjects_Empty(t *testing.T) {
-	got := DiscoverProjects(nil, types.ActiveInfo{}, &types.Config{})
+	got := DiscoverProjects(nil, &types.Config{})
 	if len(got) != 0 {
 		t.Fatalf("expected 0 projects, got %d", len(got))
 	}
@@ -19,7 +19,7 @@ func TestDiscoverProjects_Deduplicates(t *testing.T) {
 		{ProjectName: "foo", ProjectDir: "/p/foo", LastActive: now},
 		{ProjectName: "foo", ProjectDir: "/p/foo", LastActive: now.Add(-time.Hour)},
 	}
-	got := DiscoverProjects(sessions, types.ActiveInfo{}, &types.Config{})
+	got := DiscoverProjects(sessions, &types.Config{})
 	if len(got) != 1 {
 		t.Fatalf("expected 1 project, got %d", len(got))
 	}
@@ -36,7 +36,7 @@ func TestDiscoverProjects_MostRecentLastActive(t *testing.T) {
 		{ProjectName: "proj", ProjectDir: "/p/proj", LastActive: older},
 		{ProjectName: "proj", ProjectDir: "/p/proj", LastActive: newer},
 	}
-	got := DiscoverProjects(sessions, types.ActiveInfo{}, &types.Config{})
+	got := DiscoverProjects(sessions, &types.Config{})
 	if len(got) != 1 {
 		t.Fatalf("expected 1 project, got %d", len(got))
 	}
@@ -51,7 +51,7 @@ func TestDiscoverProjects_HasActiveFromSession(t *testing.T) {
 		{ProjectName: "active", ProjectDir: "/p/active", LastActive: now, IsActive: true},
 		{ProjectName: "inactive", ProjectDir: "/p/inactive", LastActive: now},
 	}
-	got := DiscoverProjects(sessions, types.ActiveInfo{}, &types.Config{})
+	got := DiscoverProjects(sessions, &types.Config{})
 	byName := make(map[string]types.Project)
 	for _, p := range got {
 		byName[p.Name] = p
@@ -70,7 +70,7 @@ func TestDiscoverProjects_HasActiveFromAnySession(t *testing.T) {
 		{ProjectName: "proj", ProjectDir: "/p/proj", LastActive: now.Add(-time.Hour), IsActive: false},
 		{ProjectName: "proj", ProjectDir: "/p/proj", LastActive: now, IsActive: true},
 	}
-	got := DiscoverProjects(sessions, types.ActiveInfo{}, &types.Config{})
+	got := DiscoverProjects(sessions, &types.Config{})
 	if !got[0].HasActive {
 		t.Error("expected HasActive=true when any session is active")
 	}
@@ -83,7 +83,7 @@ func TestDiscoverProjects_HiddenFromConfig(t *testing.T) {
 		{ProjectName: "secret", ProjectDir: "/p/secret", LastActive: now},
 	}
 	cfg := &types.Config{HiddenProjects: []string{"secret"}}
-	got := DiscoverProjects(sessions, types.ActiveInfo{}, cfg)
+	got := DiscoverProjects(sessions, cfg)
 	byName := make(map[string]types.Project)
 	for _, p := range got {
 		byName[p.Name] = p
@@ -104,7 +104,7 @@ func TestDiscoverProjects_SortOrder(t *testing.T) {
 		{ProjectName: "active-old", ProjectDir: "/p/active-old", LastActive: now.Add(-2 * time.Hour), IsActive: true},
 		{ProjectName: "middle", ProjectDir: "/p/middle", LastActive: now.Add(-2 * time.Hour)},
 	}
-	got := DiscoverProjects(sessions, types.ActiveInfo{}, &types.Config{})
+	got := DiscoverProjects(sessions, &types.Config{})
 
 	// Active projects come first
 	if got[0].Name != "active-old" {

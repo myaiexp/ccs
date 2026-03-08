@@ -9,13 +9,11 @@ import (
 	"ccs/internal/types"
 )
 
-// DetectActive returns info about running claude processes:
-// which project dirs have active sessions and which specific session IDs
-// are being resumed.
+// DetectActive scans /proc for running claude processes and returns
+// per-project-dir process counts and earliest start times.
 func DetectActive() types.ActiveInfo {
 	info := types.ActiveInfo{
-		ProjectDirs: make(map[string]bool),
-		SessionIDs:  make(map[string]bool),
+		ProjectDirs: make(map[string]types.ProjectActiveInfo),
 	}
 
 	entries, err := os.ReadDir("/proc")
@@ -50,9 +48,8 @@ func DetectActive() types.ActiveInfo {
 			continue
 		}
 
-		// Check if argv[0] is a claude binary (path ends with "/claude" or is just "claude")
-		bin := args[0]
-		baseName := filepath.Base(bin)
+		// Check if argv[0] is a claude binary
+		baseName := filepath.Base(args[0])
 		if baseName != "claude" {
 			continue
 		}
@@ -63,24 +60,22 @@ func DetectActive() types.ActiveInfo {
 			continue
 		}
 
-		encoded := encodePathToProjectDir(cwd)
-		info.ProjectDirs[encoded] = true
-
-		// Look for --resume <session-id> in args
-		for i, arg := range args {
-			if arg == "--resume" && i+1 < len(args) && args[i+1] != "" {
-				info.SessionIDs[args[i+1]] = true
-				break
-			}
+		// Get process start time from /proc/<pid> directory stat
+		procDir := filepath.Join("/proc", entry.Name())
+		procStat, err := os.Stat(procDir)
+		if err != nil {
+			continue
 		}
+		startTime := procStat.ModTime()
+
+		// Accumulate per-project-dir
+		existing := info.ProjectDirs[cwd]
+		existing.Count++
+		if existing.EarliestStart.IsZero() || startTime.Before(existing.EarliestStart) {
+			existing.EarliestStart = startTime
+		}
+		info.ProjectDirs[cwd] = existing
 	}
 
 	return info
-}
-
-// encodePathToProjectDir converts a filesystem path to the encoded directory
-// name format used by Claude's session storage.
-// "/home/mse/Projects/foo" → "-home-mse-Projects-foo"
-func encodePathToProjectDir(path string) string {
-	return strings.ReplaceAll(path, "/", "-")
 }

@@ -82,8 +82,13 @@ func (d SortDir) String() string {
 	return "↓"
 }
 
+// ProjectActiveInfo holds detection results for a single project directory.
+type ProjectActiveInfo struct {
+	Count         int       // number of running claude processes
+	EarliestStart time.Time // earliest process start time
+}
+
 // ActiveInfo holds the results of active session detection.
 type ActiveInfo struct {
-	ProjectDirs map[string]bool   // encoded project dirs with an active claude
-	SessionIDs  map[string]bool   // specific session IDs (from --resume flag)
+	ProjectDirs map[string]ProjectActiveInfo // key: absolute project dir path
 }

@@ -1103,37 +1103,10 @@ func (m *Model) handleRefresh() tea.Cmd {
 	}
 
 	active := session.DetectActive()
-
-	// Mark active sessions using the same logic as main
-	// First: exact session ID matches
-	matchedDirs := make(map[string]bool)
-	for i := range sessions {
-		if active.SessionIDs[sessions[i].ID] {
-			sessions[i].IsActive = true
-			for dir := range active.ProjectDirs {
-				_, absPath := session.DecodeProjectDir(dir)
-				if absPath == sessions[i].ProjectDir {
-					matchedDirs[dir] = true
-				}
-			}
-		}
-	}
-	// Second: most recent session per unmatched active project dir
-	for dir := range active.ProjectDirs {
-		if matchedDirs[dir] {
-			continue
-		}
-		_, absPath := session.DecodeProjectDir(dir)
-		for i := range sessions {
-			if sessions[i].ProjectDir == absPath {
-				sessions[i].IsActive = true
-				break
-			}
-		}
-	}
+	session.MarkActiveSessions(sessions, active)
 
 	m.sessions = sessions
-	m.projects = project.DiscoverProjects(sessions, active, m.config)
+	m.projects = project.DiscoverProjects(sessions, m.config)
 	m.applyFilter()
 	return nil
 }

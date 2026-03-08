@@ -6,8 +6,8 @@ import (
 )
 
 // DiscoverProjects extracts unique projects from session data,
-// merges with active detection and config for hidden status.
-func DiscoverProjects(sessions []types.Session, active types.ActiveInfo, cfg *types.Config) []types.Project {
+// merges with config for hidden status. Sessions must already have IsActive set.
+func DiscoverProjects(sessions []types.Session, cfg *types.Config) []types.Project {
 	hiddenSet := make(map[string]bool, len(cfg.HiddenProjects))
 	for _, h := range cfg.HiddenProjects {
 		hiddenSet[h] = true
