@@ -30,6 +30,16 @@ var (
 			Foreground(lipgloss.Color("240")).
 			Render("○")
 
+	// External session dot (detected via /proc, not launched from ccs)
+	externalDot = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("220")).
+			Render("●")
+
+	// Activity summary style (dim italic)
+	activityStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")).
+			Italic(true)
+
 	// Session number
 	numStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))

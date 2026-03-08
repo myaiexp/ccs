@@ -13,9 +13,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 
+	"ccs/internal/activity"
 	"ccs/internal/config"
 	"ccs/internal/project"
 	"ccs/internal/session"
+	"ccs/internal/tmux"
 	"ccs/internal/types"
 )
 
@@ -52,9 +54,11 @@ type Model struct {
 	width        int
 	height       int
 	launching    bool
+	hubMode      bool
 	sortField    types.SortField
 	sortDir      types.SortDir
 	tracker      *session.Tracker
+	activities   map[string][]activity.Entry // sessionID -> recent entries
 }
 
 func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker) Model {
@@ -76,9 +80,11 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 		config:       cfg,
 		filter:       ti,
 		focus:        FocusSessions,
+		hubMode:      tmux.InTmux(),
 		sortField:    types.SortByTime,
 		sortDir:      types.SortDesc,
 		tracker:      tracker,
+		activities:   make(map[string][]activity.Entry),
 	}
 	m.applyFilter()
 
@@ -107,6 +113,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ExecFinishedMsg:
 		m.launching = false
 		return m, refreshCmd()
+
+	case TmuxLaunchDoneMsg:
+		return m, refreshCmd()
+
+	case TmuxSwitchDoneMsg:
+		return m, nil
 
 	case RefreshMsg:
 		return m, m.handleRefresh()
@@ -212,6 +224,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		idx := n - 1
 		if idx < len(m.filtered) {
 			sess := m.filtered[idx]
+			if m.hubMode {
+				tmuxWindows := m.tracker.TmuxWindowIDs()
+				if wid, ok := tmuxWindows[sess.ID]; ok {
+					return m, TmuxSwitch(wid)
+				}
+				return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
+			}
 			return m, func() tea.Msg {
 				return LaunchResumeMsg{Session: sess}
 			}
@@ -245,6 +264,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		return m.handleEnter()
+
+	case "o":
+		return m.handleInlineEnter()
 
 	case "n":
 		m.focus = FocusProjects
@@ -368,6 +390,31 @@ func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 }
 
 func (m Model) handleEnter() (Model, tea.Cmd) {
+	if m.hubMode {
+		return m.handleHubEnter()
+	}
+	return m.handleInlineEnter()
+}
+
+func (m Model) handleHubEnter() (Model, tea.Cmd) {
+	if m.focus == FocusSessions && len(m.filtered) > 0 {
+		sess := m.filtered[m.sessionIdx]
+		// Check if session has a tmux window — switch to it
+		tmuxWindows := m.tracker.TmuxWindowIDs()
+		if wid, ok := tmuxWindows[sess.ID]; ok {
+			return m, TmuxSwitch(wid)
+		}
+		// Launch in new tmux window
+		return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
+	}
+	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
+		proj := m.filteredProj[m.projectIdx]
+		return m, TmuxLaunchNew(proj, m.config.ClaudeFlags, m.tracker)
+	}
+	return m, nil
+}
+
+func (m Model) handleInlineEnter() (Model, tea.Cmd) {
 	if m.focus == FocusSessions && len(m.filtered) > 0 {
 		sess := m.filtered[m.sessionIdx]
 		return m, func() tea.Msg {
@@ -747,12 +794,15 @@ func (m Model) View() string {
 // renderSession renders a non-selected session row. visNum is the window-local
 // shortcut number (1-9+), not the global index.
 func (m Model) renderSession(visNum int, s types.Session) string {
-	// Dot
-	var prefix string
-	if s.IsActive {
-		prefix = activeDot
-	} else {
-		prefix = inactiveDot
+	// Three-state dot based on ActiveSource
+	var dot string
+	switch s.ActiveSource {
+	case types.SourceTmux:
+		dot = activeDot
+	case types.SourceProc:
+		dot = externalDot
+	default:
+		dot = inactiveDot
 	}
 
 	// Position number, right-aligned to 4 digits
@@ -782,8 +832,17 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		}
 	}
 
-	// Right side (ctx% + time) — build first so we know exact width
+	// Activity text for active sessions
+	activityText := ""
+	if entries, ok := m.activities[s.ID]; ok && len(entries) > 0 {
+		activityText = activityStyle.Render(activity.FormatEntry(entries[0]))
+	}
+
+	// Right side: activity + ctx% + time
 	rightSide := contextStyle(s.ContextPct).Render(ctxStr) + " " + dimStyle.Render(timeStr)
+	if activityText != "" {
+		rightSide = activityText + "  " + rightSide
+	}
 	if hiddenLabel != "" {
 		rightSide = hiddenLabel + rightSide
 	}
@@ -808,7 +867,7 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		title += "…"
 	}
 
-	leftSide := fmt.Sprintf("%s %s %-14s  %s", prefix, num, projName, title)
+	leftSide := fmt.Sprintf("%s %s %-14s  %s", dot, num, projName, title)
 	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
 		gap = 1
