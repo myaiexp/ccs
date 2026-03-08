@@ -1,0 +1,251 @@
+package activity
+
+import (
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// Entry represents a single activity extracted from a JSONL assistant message.
+type Entry struct {
+	Type      string    // "tool_use" or "text"
+	Tool      string    // "Read", "Edit", "Bash", etc. Empty for text.
+	Summary   string    // "Edit model.go", "Bash: go test ./...", "Fixed the import..."
+	Timestamp time.Time
+}
+
+// jsonLine is the top-level structure of a JSONL line.
+type jsonLine struct {
+	Type      string      `json:"type"`
+	Message   jsonMessage `json:"message"`
+	Timestamp string      `json:"timestamp"`
+}
+
+type jsonMessage struct {
+	Role    string           `json:"role"`
+	Content []jsonContentBlock `json:"content"`
+}
+
+type jsonContentBlock struct {
+	Type  string          `json:"type"`
+	Name  string          `json:"name,omitempty"`
+	Text  string          `json:"text,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+}
+
+type toolInput struct {
+	FilePath string `json:"file_path"`
+	Command  string `json:"command"`
+	Pattern  string `json:"pattern"`
+}
+
+// ExtractFromLine parses a single JSONL line and returns activity entries.
+// Returns nil if the line is not an assistant message or is malformed.
+func ExtractFromLine(line []byte) []Entry {
+	line = trimLine(line)
+	if len(line) == 0 {
+		return nil
+	}
+
+	var l jsonLine
+	if err := json.Unmarshal(line, &l); err != nil {
+		return nil
+	}
+
+	if l.Type != "assistant" {
+		return nil
+	}
+
+	var ts time.Time
+	if l.Timestamp != "" {
+		if parsed, err := time.Parse(time.RFC3339, l.Timestamp); err == nil {
+			ts = parsed
+		}
+	}
+
+	var entries []Entry
+	for _, block := range l.Message.Content {
+		switch block.Type {
+		case "tool_use":
+			e := Entry{
+				Type:      "tool_use",
+				Tool:      block.Name,
+				Summary:   buildToolSummary(block.Name, block.Input),
+				Timestamp: ts,
+			}
+			entries = append(entries, e)
+		case "text":
+			if block.Text == "" {
+				continue
+			}
+			summary := firstLine(block.Text, 60)
+			e := Entry{
+				Type:      "text",
+				Summary:   summary,
+				Timestamp: ts,
+			}
+			entries = append(entries, e)
+		}
+	}
+
+	return entries
+}
+
+// TailFile reads the last ~32KB of a JSONL file, extracts activity entries,
+// and returns the latest maxEntries (newest last in file = newest first in result).
+func TailFile(path string, maxEntries int) []Entry {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	const tailSize = 32 * 1024
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+
+	size := info.Size()
+	offset := int64(0)
+	if size > tailSize {
+		offset = size - tailSize
+	}
+
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil
+		}
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// Discard first partial line if we seeked into the middle of the file.
+	if offset > 0 && len(lines) > 0 {
+		lines = lines[1:]
+	}
+
+	var all []Entry
+	for _, line := range lines {
+		entries := ExtractFromLine([]byte(line))
+		all = append(all, entries...)
+	}
+
+	// Return newest first: reverse the slice, then cap at maxEntries.
+	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+		all[i], all[j] = all[j], all[i]
+	}
+
+	if len(all) > maxEntries {
+		all = all[:maxEntries]
+	}
+
+	return all
+}
+
+// FormatEntry returns a human-readable display string for an entry.
+func FormatEntry(e Entry) string {
+	switch e.Type {
+	case "tool_use":
+		return formatToolEntry(e)
+	case "text":
+		return e.Summary
+	default:
+		return e.Summary
+	}
+}
+
+func formatToolEntry(e Entry) string {
+	switch e.Tool {
+	case "Read":
+		return "Reading " + extractFilename(e.Summary)
+	case "Edit":
+		return "Editing " + extractFilename(e.Summary)
+	case "Write":
+		return "Writing " + extractFilename(e.Summary)
+	case "Bash":
+		cmd := strings.TrimPrefix(e.Summary, "Bash: ")
+		return "Running " + cmd
+	case "Grep":
+		pat := strings.TrimPrefix(e.Summary, "Grep: ")
+		return "Searching " + pat
+	case "Glob":
+		pat := strings.TrimPrefix(e.Summary, "Glob: ")
+		return "Finding " + pat
+	default:
+		return e.Tool
+	}
+}
+
+func buildToolSummary(name string, rawInput json.RawMessage) string {
+	var inp toolInput
+	// Best effort parse; fields will be zero-value if missing.
+	_ = json.Unmarshal(rawInput, &inp)
+
+	switch name {
+	case "Read", "Edit", "Write":
+		if inp.FilePath != "" {
+			return name + ": " + filepath.Base(inp.FilePath)
+		}
+		return name
+	case "Bash":
+		if inp.Command != "" {
+			cmd := truncate(inp.Command, 40)
+			return "Bash: " + cmd
+		}
+		return "Bash"
+	case "Grep", "Glob":
+		if inp.Pattern != "" {
+			pat := truncate(inp.Pattern, 40)
+			return name + ": " + pat
+		}
+		return name
+	default:
+		return name
+	}
+}
+
+// extractFilename extracts the filename part from a summary like "Edit: model.go".
+func extractFilename(summary string) string {
+	if idx := strings.Index(summary, ": "); idx >= 0 {
+		return summary[idx+2:]
+	}
+	return summary
+}
+
+func firstLine(text string, maxLen int) string {
+	line := text
+	if idx := strings.IndexByte(text, '\n'); idx >= 0 {
+		line = text[:idx]
+	}
+	return truncate(strings.TrimSpace(line), maxLen)
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func trimLine(line []byte) []byte {
+	// Trim whitespace/newlines.
+	start := 0
+	end := len(line)
+	for start < end && (line[start] == ' ' || line[start] == '\t' || line[start] == '\n' || line[start] == '\r') {
+		start++
+	}
+	for end > start && (line[end-1] == ' ' || line[end-1] == '\t' || line[end-1] == '\n' || line[end-1] == '\r') {
+		end--
+	}
+	return line[start:end]
+}
