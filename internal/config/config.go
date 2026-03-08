@@ -26,6 +26,7 @@ func Load() (*types.Config, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
+		applyDefaults(cfg)
 		return cfg, nil // missing config is fine
 	}
 
@@ -33,7 +34,17 @@ func Load() (*types.Config, error) {
 		return cfg, err
 	}
 
+	applyDefaults(cfg)
 	return cfg, nil
+}
+
+func applyDefaults(cfg *types.Config) {
+	if cfg.TmuxSessionName == "" {
+		cfg.TmuxSessionName = "ccs"
+	}
+	if cfg.ActivityLines <= 0 {
+		cfg.ActivityLines = 5
+	}
 }
 
 func Save(cfg *types.Config) error {

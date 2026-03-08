@@ -210,11 +210,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Preferences overlay
 	if m.showPrefs {
+		const prefsCount = 2
 		switch key {
 		case "j", "down":
-			// only one pref item for now, but ready for more
-			if m.prefsIdx < 0 {
-				m.prefsIdx = 0
+			if m.prefsIdx < prefsCount-1 {
+				m.prefsIdx++
 			}
 		case "k", "up":
 			if m.prefsIdx > 0 {
@@ -224,6 +224,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch m.prefsIdx {
 			case 0: // relative numbers
 				m.config.RelativeNumbers = !m.config.RelativeNumbers
+				config.Save(m.config)
+			case 1: // activity lines cycle: 3 → 5 → 10 → 15 → 3
+				switch m.config.ActivityLines {
+				case 3:
+					m.config.ActivityLines = 5
+				case 5:
+					m.config.ActivityLines = 10
+				case 10:
+					m.config.ActivityLines = 15
+				default:
+					m.config.ActivityLines = 3
+				}
 				config.Save(m.config)
 			}
 		case "esc", "p", "q":
@@ -686,6 +698,13 @@ func gridPosition(grid [][]int, idx int) (int, int) {
 	return 0, 0
 }
 
+func (m *Model) activityLines() int {
+	if m.config.ActivityLines > 0 {
+		return m.config.ActivityLines
+	}
+	return 5
+}
+
 // detailPaneLines calculates the number of lines the detail pane consumes
 // for the currently selected session (border + content including wrapped first message).
 func (m *Model) detailPaneLines() int {
@@ -716,8 +735,7 @@ func (m *Model) detailPaneLines() int {
 		}
 
 		// Right column: "Activity" header(1) + blank(1) + entries
-		const defaultActivityLines = 5
-		actCount := defaultActivityLines
+		actCount := m.activityLines()
 		if actCount > len(entries) {
 			actCount = len(entries)
 		}
@@ -1052,8 +1070,7 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 
 		// Right column: activity log
-		const defaultActivityLines = 5
-		maxEntries := defaultActivityLines
+		maxEntries := m.activityLines()
 		if maxEntries > len(entries) {
 			maxEntries = len(entries)
 		}
@@ -1184,7 +1201,11 @@ func (m Model) renderProjects() string {
 func (m Model) renderFooter() string {
 	var hints []string
 	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		hints = append(hints, "enter/1-9 resume")
+		if m.hubMode {
+			hints = append(hints, "enter switch/resume", "o inline")
+		} else {
+			hints = append(hints, "enter/1-9 resume")
+		}
 	}
 	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
 		hints = append(hints, "enter new")
@@ -1207,7 +1228,8 @@ func (m Model) renderHelp() string {
 		titleStyle.Render("ccs — Claude Code Sessions"),
 		"",
 		"  1-9         Resume session by number",
-		"  enter       Resume selected / new in project",
+		"  enter       Resume/switch (tmux) or inline launch",
+		"  o           Force inline launch (TUI suspends)",
 		"  n           Jump to projects section",
 		"  /           Toggle filter bar",
 		"  esc         Clear filter / exit filter",
@@ -1233,11 +1255,13 @@ func (m Model) renderHelp() string {
 
 func (m Model) renderPrefs() string {
 	type prefItem struct {
-		label   string
-		enabled bool
+		label string
+		value string // non-empty for cycle items, empty for toggle
+		on    bool   // only for toggles
 	}
 	items := []prefItem{
-		{"Relative numbers (nvim-style)", m.config.RelativeNumbers},
+		{"Relative numbers (nvim-style)", "", m.config.RelativeNumbers},
+		{"Activity lines", fmt.Sprintf("%d", m.config.ActivityLines), false},
 	}
 
 	lines := []string{
@@ -1245,21 +1269,32 @@ func (m Model) renderPrefs() string {
 		"",
 	}
 	for i, item := range items {
-		toggle := dimStyle.Render("[ ]")
-		if item.enabled {
-			toggle = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("[✓]")
-		}
-		label := item.label
 		cursor := "  "
 		if i == m.prefsIdx {
 			cursor = cursorStyle.Render("▸ ")
+		}
+
+		var indicator string
+		label := item.label
+		if item.value != "" {
+			// Cycle item
+			indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render("[" + item.value + "]")
+		} else {
+			// Toggle item
+			indicator = dimStyle.Render("[ ]")
+			if item.on {
+				indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("[✓]")
+			}
+		}
+
+		if i == m.prefsIdx {
 			label = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Render(label)
 		} else {
 			label = dimStyle.Render(label)
 		}
-		lines = append(lines, fmt.Sprintf("  %s%s %s", cursor, toggle, label))
+		lines = append(lines, fmt.Sprintf("  %s%s %s", cursor, indicator, label))
 	}
-	lines = append(lines, "", dimStyle.Render("  enter/space toggle  esc/p close"))
+	lines = append(lines, "", dimStyle.Render("  enter/space toggle/cycle  esc/p close"))
 
 	content := strings.Join(lines, "\n")
 	styled := helpStyle.Render(content)

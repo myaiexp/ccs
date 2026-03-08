@@ -41,6 +41,8 @@ type Config struct {
 	HiddenSessions  []string `toml:"hidden_sessions"`
 	ClaudeFlags     []string `toml:"claude_flags"`
 	RelativeNumbers bool     `toml:"relative_numbers"`
+	TmuxSessionName string   `toml:"tmux_session_name"`
+	ActivityLines   int      `toml:"activity_lines"`
 }
 
 // SortField determines which field to sort by.

@@ -10,6 +10,7 @@ import (
 	"ccs/internal/config"
 	"ccs/internal/project"
 	"ccs/internal/session"
+	"ccs/internal/tmux"
 	"ccs/internal/tui"
 	"ccs/internal/types"
 	"ccs/internal/watcher"
@@ -20,6 +21,16 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Bootstrap into tmux if not already inside
+	if !tmux.InTmux() {
+		if err := tmux.Bootstrap(cfg.TmuxSessionName); err != nil {
+			fmt.Fprintf(os.Stderr, "Error bootstrapping tmux: %v\n", err)
+			os.Exit(1)
+		}
+		// Bootstrap replaces the process — should never reach here
+		return
 	}
 
 	home, err := os.UserHomeDir()
@@ -55,8 +66,7 @@ func main() {
 	}
 
 	// Create file watcher for activity monitoring
-	const defaultActivityLines = 5
-	w, err := watcher.New(defaultActivityLines)
+	w, err := watcher.New(cfg.ActivityLines)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not create watcher: %v\n", err)
 		w = nil
