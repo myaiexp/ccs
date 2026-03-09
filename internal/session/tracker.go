@@ -134,6 +134,16 @@ func (t *Tracker) Refresh() {
 		})
 	}
 
+	// Match PIDs to tmux windows for sessions missing a window ID
+	panePIDs := tmux.PanePIDs()
+	for i := range t.Sessions {
+		if t.Sessions[i].TmuxWindowID == "" {
+			if wid, ok := panePIDs[t.Sessions[i].PID]; ok {
+				t.Sessions[i].TmuxWindowID = wid
+			}
+		}
+	}
+
 	t.save()
 }
 

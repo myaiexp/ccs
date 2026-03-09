@@ -68,6 +68,27 @@ func CapturePaneContent(windowID string, lines int) (string, error) {
 	return content, nil
 }
 
+// PanePIDs returns a map of PID → window ID for all panes in the current tmux server.
+func PanePIDs() map[int]string {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{window_id} #{pane_pid}").Output()
+	if err != nil {
+		return nil
+	}
+	result := make(map[int]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		pid := 0
+		fmt.Sscanf(parts[1], "%d", &pid)
+		if pid > 0 {
+			result[pid] = parts[0]
+		}
+	}
+	return result
+}
+
 // WindowExists checks whether a tmux window with the given ID exists.
 func WindowExists(windowID string) bool {
 	out, err := exec.Command("tmux", "list-windows", "-F", "#{window_id}").Output()

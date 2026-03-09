@@ -756,59 +756,34 @@ func (m *Model) activityLines() int {
 	return 5
 }
 
-// detailPaneLines calculates the number of lines the detail pane consumes
-// for the currently selected session (border + content including wrapped first message).
+// detailPaneLines calculates the number of lines the detail pane consumes.
+// Layout: header(1) + info(1) + blank(1) + status(1) + border(2) = 6 base
+// Plus activity/terminal lines if present.
 func (m *Model) detailPaneLines() int {
 	if m.focus != FocusSessions || len(m.filtered) == 0 {
 		return 0
 	}
 	s := m.filtered[m.sessionIdx]
 
+	// base: header(1) + info(1) + blank(1) + status(1) + border(2) = 6
+	base := 6
+
 	entries := m.activities[s.ID]
-	usesTwoColumn := s.IsActive && len(entries) > 0
-
-	if usesTwoColumn {
-		// Two-column layout: height is max(left, right) + border(2)
-		contentWidth := m.width - 8
-		if contentWidth < 40 {
-			contentWidth = 40
+	hasPaneCapture := false
+	if s.ActiveSource == types.SourceTmux {
+		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+			hasPaneCapture = true
 		}
-		leftWidth := contentWidth * 40 / 100
-		if leftWidth < 30 {
-			leftWidth = 30
-		}
+	}
 
-		// Left column: header(1) + blank(1) + project(1) + stats(1) + id(1) = 5 lines
-		leftLines := 5
-		if s.FirstMsg != "" {
-			msgLines := wrapText(s.FirstMsg, leftWidth)
-			leftLines += len(msgLines) + 1 // +1 for blank line
-		}
-
-		// Right column: "Activity" header(1) + blank(1) + entries
+	if hasPaneCapture || len(entries) > 0 {
 		actCount := m.activityLines()
-		if actCount > len(entries) {
+		if !hasPaneCapture && actCount > len(entries) {
 			actCount = len(entries)
 		}
-		rightLines := 2 + actCount // header + blank + entries
-
-		contentLines := leftLines
-		if rightLines > contentLines {
-			contentLines = rightLines
-		}
-		return contentLines + 2 // +2 for border
+		base += 1 + actCount // blank + activity lines
 	}
 
-	// Single-column: border(2) + header(1) + blank(1) + project(1) + stats(1) + id(1) = 7
-	base := 7
-	if s.FirstMsg != "" {
-		contentWidth := m.width - 8 // outer border(2) + padding(2) + detail border(2) + detail padding(2)
-		if contentWidth < 40 {
-			contentWidth = 40
-		}
-		msgLines := wrapText(s.FirstMsg, contentWidth)
-		base += len(msgLines) + 1 // +1 for blank line before message
-	}
 	return base
 }
 
@@ -1156,7 +1131,6 @@ func (m Model) renderDetail(s types.Session) string {
 	projPart := detailValueStyle.Render(projName) + "  "
 	projWidth := lipgloss.Width(projPart)
 
-	// Truncate title to leave room for right side (ctx% + time) with at least 2 gap chars
 	maxTitleWidth := contentWidth - projWidth - rightWidth - 2
 	if maxTitleWidth < 10 {
 		maxTitleWidth = 10
@@ -1177,101 +1151,50 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 	headerLine := leftSide + strings.Repeat(" ", gap) + rightSide
 
-	// File size
+	// Compact info line: dir + messages + size + ID
 	sizeStr := formatSize(s.FileSize)
+	infoLine := dimStyle.Render(s.ProjectDir) + "  " +
+		detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " +
+		detailValueStyle.Render(sizeStr) + "  " +
+		dimStyle.Render(s.ID)
 
-	infoLines := []string{
+	lines := []string{
 		headerLine,
+		infoLine,
 		"",
-		detailLabelStyle.Render("Project ") + dimStyle.Render(s.ProjectDir),
-		detailLabelStyle.Render("Messages ") + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) +
-			detailLabelStyle.Render("  Size ") + detailValueStyle.Render(sizeStr) +
-			"  " + status + hidden,
-		detailLabelStyle.Render("ID ") + dimStyle.Render(s.ID),
+		status + hidden,
 	}
 
-	// Full first message, word-wrapped
+	// Activity / terminal content below status (full width)
 	entries := m.activities[s.ID]
-
-	// Determine right column content: pane capture for SourceTmux, JSONL activity for SourceProc
 	hasPaneCapture := false
 	if s.ActiveSource == types.SourceTmux {
 		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
 			hasPaneCapture = true
 		}
 	}
-	usesTwoColumn := s.IsActive && (hasPaneCapture || len(entries) > 0)
 
-	if usesTwoColumn {
-		// Two-column layout: left (~40%) = info + first message, right (~60%) = live content
-		leftWidth := contentWidth * 40 / 100
-		rightColWidth := contentWidth - leftWidth - 2 // 2 for gap between columns
-		if leftWidth < 30 {
-			leftWidth = 30
+	if hasPaneCapture {
+		lines = append(lines, "")
+		snap := m.paneContent[s.ID]
+		paneLines := strings.Split(snap.Content, "\n")
+		maxLines := m.activityLines()
+		if len(paneLines) > maxLines {
+			paneLines = paneLines[len(paneLines)-maxLines:]
 		}
-		if rightColWidth < 20 {
-			rightColWidth = 20
+		lines = append(lines, paneLines...)
+	} else if len(entries) > 0 {
+		lines = append(lines, "")
+		maxEntries := m.activityLines()
+		if maxEntries > len(entries) {
+			maxEntries = len(entries)
 		}
-
-		// Left column: info lines + first message
-		var leftLines []string
-		leftLines = append(leftLines, infoLines...)
-		if s.FirstMsg != "" {
-			leftLines = append(leftLines, "")
-			wrapped := wrapText(s.FirstMsg, leftWidth)
-			for _, wl := range wrapped {
-				leftLines = append(leftLines, dimStyle.Render(wl))
-			}
-		}
-
-		// Right column: pane capture or activity log
-		var rightLines []string
-		if hasPaneCapture {
-			rightLines = append(rightLines, detailLabelStyle.Render("Terminal"))
-			rightLines = append(rightLines, "")
-			snap := m.paneContent[s.ID]
-			paneLines := strings.Split(snap.Content, "\n")
-			maxLines := m.activityLines()
-			if len(paneLines) > maxLines {
-				paneLines = paneLines[len(paneLines)-maxLines:]
-			}
-			for _, pl := range paneLines {
-				rightLines = append(rightLines, pl)
-			}
-		} else {
-			rightLines = append(rightLines, detailLabelStyle.Render("Activity"))
-			rightLines = append(rightLines, "")
-			maxEntries := m.activityLines()
-			if maxEntries > len(entries) {
-				maxEntries = len(entries)
-			}
-			for i := 0; i < maxEntries; i++ {
-				rightLines = append(rightLines, activityStyle.Render(activity.FormatEntry(entries[i])))
-			}
-		}
-
-		// Pad shorter column to match heights
-		leftContent := strings.Join(leftLines, "\n")
-		rightContent := strings.Join(rightLines, "\n")
-
-		leftCol := lipgloss.NewStyle().Width(leftWidth).Render(leftContent)
-		rightCol := lipgloss.NewStyle().Width(rightColWidth).Render(rightContent)
-
-		content := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "  ", rightCol)
-		styled := detailBorderStyle.Width(detailWidth).Render(content)
-		return styled
-	}
-
-	// Single-column layout (inactive or no activity entries)
-	if s.FirstMsg != "" {
-		infoLines = append(infoLines, "")
-		wrapped := wrapText(s.FirstMsg, contentWidth)
-		for _, wl := range wrapped {
-			infoLines = append(infoLines, dimStyle.Render(wl))
+		for i := 0; i < maxEntries; i++ {
+			lines = append(lines, activityStyle.Render(activity.FormatEntry(entries[i])))
 		}
 	}
 
-	content := strings.Join(infoLines, "\n")
+	content := strings.Join(lines, "\n")
 	styled := detailBorderStyle.Width(detailWidth).Render(content)
 	return styled
 }
