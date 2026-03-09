@@ -68,6 +68,7 @@ func CapturePaneContent(windowID string, lines int) (string, error) {
 	content := string(out)
 	content = strings.TrimRight(content, "\n")
 	content = stripStatusBar(content)
+	content = stripTrailingNoise(content)
 	return content, nil
 }
 
@@ -94,6 +95,35 @@ func stripStatusBar(content string) string {
 	}
 	result := strings.TrimRight(strings.Join(lines, "\n"), "\n")
 	return result
+}
+
+// stripTrailingNoise removes trailing empty lines and spinner/status lines (✻ Thinking...)
+// from the bottom of captured content. Returns whether a spinner was present (activity signal).
+func stripTrailingNoise(content string) string {
+	lines := strings.Split(content, "\n")
+	// Strip from the bottom: empty lines and spinner lines
+	for len(lines) > 0 {
+		line := strings.TrimSpace(lines[len(lines)-1])
+		if line == "" || isSpinnerLine(line) {
+			lines = lines[:len(lines)-1]
+		} else {
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// isSpinnerLine detects Claude's activity spinner lines (✻ Thinking..., ✻ Churned for Xm Xs, etc).
+func isSpinnerLine(line string) bool {
+	for _, r := range line {
+		if r == ' ' {
+			continue
+		}
+		// ✻ U+273B, ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ braille spinner chars (U+2800-U+28FF)
+		return r == '✻' || r == '⠋' || r == '⠙' || r == '⠹' || r == '⠸' ||
+			r == '⠼' || r == '⠴' || r == '⠦' || r == '⠧' || r == '⠇' || r == '⠏'
+	}
+	return false
 }
 
 // isBoxDrawingLine returns true if a line is predominantly box-drawing characters,
