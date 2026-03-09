@@ -59,8 +59,13 @@ func ParseSession(fpath string) (*types.Session, error) {
 		return nil, err
 	}
 
+	// Session ID is the filename (minus .jsonl extension). This is the canonical
+	// local session ID that claude --resume expects. We never extract it from JSONL
+	// content because teleported sessions contain the original web session ID in
+	// their early lines, which differs from the local filename-based ID.
+	sessionID := strings.TrimSuffix(filepath.Base(fpath), ".jsonl")
+
 	var (
-		sessionID    string
 		title        string
 		fallbackText string
 		msgCount     int
@@ -77,10 +82,6 @@ func ParseSession(fpath string) (*types.Session, error) {
 		var entry jsonLine
 		if err := json.Unmarshal(line, &entry); err != nil {
 			continue
-		}
-
-		if sessionID == "" && entry.SessionID != "" {
-			sessionID = entry.SessionID
 		}
 
 		if createdAt.IsZero() && entry.Timestamp != "" {

@@ -120,11 +120,12 @@ func TestParseSession_Synthetic(t *testing.T) {
 		t.Fatalf("ParseSession failed: %v", err)
 	}
 
-	if sess.ID != "abcdef12-3456-7890-abcd-ef1234567890" {
-		t.Errorf("ID = %q, want abcdef12-...", sess.ID)
+	// Session ID comes from the filename, not JSONL content
+	if sess.ID != "test-session" {
+		t.Errorf("ID = %q, want %q", sess.ID, "test-session")
 	}
-	if sess.ShortID != "abcdef12" {
-		t.Errorf("ShortID = %q, want abcdef12", sess.ShortID)
+	if sess.ShortID != "test-ses" {
+		t.Errorf("ShortID = %q, want %q", sess.ShortID, "test-ses")
 	}
 	// 3 user messages (1 meta + 2 real)
 	if sess.MsgCount != 3 {
@@ -228,6 +229,64 @@ func TestParseSession_Untitled(t *testing.T) {
 
 	if sess.Title != "(untitled)" {
 		t.Errorf("Title = %q, want (untitled)", sess.Title)
+	}
+}
+
+func TestParseSession_TeleportedSession(t *testing.T) {
+	// Teleported sessions have a file-history-snapshot first (no sessionId),
+	// then content with the original web session ID, then local content with
+	// the filename-based session ID. The parser must use the filename, not content.
+	dir := t.TempDir()
+	localID := "63e426b0-544d-4b92-bc74-06fbaf477db6"
+	fpath := filepath.Join(dir, localID+".jsonl")
+
+	lines := []map[string]any{
+		// First line: no sessionId (teleport artifact)
+		{
+			"type":      "file-history-snapshot",
+			"messageId": "314bbc76-7228-458e-b40a-5e9b8812a68f",
+		},
+		// Teleported web content with the WRONG (web) session ID
+		{
+			"type":      "user",
+			"sessionId": "cfb5dc3b-01d0-4b3f-92f7-7c70a5851371",
+			"isMeta":    false,
+			"message": map[string]any{
+				"role":    "user",
+				"content": "original web message",
+			},
+		},
+		// Local content after teleport with the correct session ID
+		{
+			"type":      "user",
+			"sessionId": localID,
+			"isMeta":    false,
+			"message": map[string]any{
+				"role":    "user",
+				"content": "local followup message",
+			},
+		},
+	}
+
+	f, _ := os.Create(fpath)
+	for _, line := range lines {
+		b, _ := json.Marshal(line)
+		f.Write(b)
+		f.Write([]byte("\n"))
+	}
+	f.Close()
+
+	sess, err := ParseSession(fpath)
+	if err != nil {
+		t.Fatalf("ParseSession failed: %v", err)
+	}
+
+	// Must use filename-based ID, not the web session ID from content
+	if sess.ID != localID {
+		t.Errorf("ID = %q, want %q (filename-based)", sess.ID, localID)
+	}
+	if sess.Title != "original web message" {
+		t.Errorf("Title = %q, want %q", sess.Title, "original web message")
 	}
 }
 
