@@ -53,19 +53,70 @@ func SelectWindow(windowID string) error {
 
 // CapturePaneContent captures the last N lines of a tmux window's visible output.
 // Returns raw terminal output with trailing empty lines trimmed.
+// Strips status bar / HUD lines from the bottom (detected by lines of box-drawing chars).
 func CapturePaneContent(windowID string, lines int) (string, error) {
 	if lines <= 0 {
 		lines = 30
 	}
-	args := []string{"capture-pane", "-t", windowID, "-p", "-S", fmt.Sprintf("-%d", lines)}
+	// Capture extra lines to account for HUD that will be stripped
+	captureLines := lines + 15
+	args := []string{"capture-pane", "-t", windowID, "-p", "-S", fmt.Sprintf("-%d", captureLines)}
 	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
 		return "", err
 	}
 	content := string(out)
-	// Trim trailing empty lines
 	content = strings.TrimRight(content, "\n")
+	content = stripStatusBar(content)
 	return content, nil
+}
+
+// stripStatusBar removes status bar / HUD lines from the bottom of captured pane content.
+// Scans the last 15 lines from the bottom for the topmost box-drawing separator line
+// and strips everything from there downward (HUD content, prompt lines, etc).
+func stripStatusBar(content string) string {
+	lines := strings.Split(content, "\n")
+	// Scan the last 15 lines for the topmost separator
+	cutIdx := -1
+	searchStart := len(lines) - 15
+	if searchStart < 0 {
+		searchStart = 0
+	}
+	for i := searchStart; i < len(lines); i++ {
+		if isBoxDrawingLine(lines[i]) {
+			if cutIdx == -1 {
+				cutIdx = i // first (topmost) separator in the bottom region
+			}
+		}
+	}
+	if cutIdx > 0 {
+		lines = lines[:cutIdx]
+	}
+	result := strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	return result
+}
+
+// isBoxDrawingLine returns true if a line is predominantly box-drawing characters,
+// indicating a status bar separator.
+func isBoxDrawingLine(line string) bool {
+	if len(line) == 0 {
+		return false
+	}
+	boxCount := 0
+	total := 0
+	for _, r := range line {
+		if r == ' ' || r == '\t' {
+			continue
+		}
+		total++
+		// Box drawing chars: ─━═╌╍╎╏│┃ and related (U+2500-U+257F)
+		// Also ▪▫● and similar decorative markers
+		if r >= 0x2500 && r <= 0x257F {
+			boxCount++
+		}
+	}
+	// A separator line is mostly box drawing chars (>80% of non-space chars)
+	return total > 10 && boxCount*100/total > 80
 }
 
 // PanePIDs returns a map of PID → window ID for all panes in the current tmux server.
