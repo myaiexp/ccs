@@ -157,23 +157,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PaneCaptureTickMsg:
 		var cmds []tea.Cmd
-		// Capture for followed session
-		if m.followID != "" {
+		// Capture all sessions that have tmux windows (active or not)
+		captured := make(map[string]bool)
+		tmuxWindows := m.tracker.TmuxWindowIDs()
+		for sessID := range tmuxWindows {
+			if cmd := m.captureCmdForSession(sessID); cmd != nil {
+				cmds = append(cmds, cmd)
+				captured[sessID] = true
+			}
+		}
+		// Also capture followed session if not already covered
+		if m.followID != "" && !captured[m.followID] {
 			if cmd := m.captureCmdForSession(m.followID); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
-		// Capture for selected session in detail pane (if different from followed)
-		// Captures any session with a tmux window, not just active ones
-		if m.focus == FocusSessions && len(m.filtered) > 0 {
-			sess := m.filtered[m.sessionIdx]
-			if sess.ID != m.followID {
-				if cmd := m.captureCmdForSession(sess.ID); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-		}
-		// Always re-subscribe — captures are cheap no-ops when nothing is active
+		// Always re-subscribe
 		cmds = append(cmds, paneCaptureTickCmd())
 		return m, tea.Batch(cmds...)
 
@@ -799,15 +798,10 @@ func (m *Model) detailPaneLines() int {
 		hasPaneCapture = true
 	}
 
-	if hasPaneCapture || len(entries) > 0 || s.FirstMsg != "" {
+	if hasPaneCapture || len(entries) > 0 {
 		actCount := m.activityLines()
-		if !hasPaneCapture && len(entries) > 0 && actCount > len(entries) {
+		if !hasPaneCapture && actCount > len(entries) {
 			actCount = len(entries)
-		} else if !hasPaneCapture && len(entries) == 0 && s.FirstMsg != "" {
-			msgLines := len(wrapText(s.FirstMsg, m.width-8))
-			if msgLines < actCount {
-				actCount = msgLines
-			}
 		}
 		base += 1 + actCount // blank + activity lines
 	}
@@ -1245,17 +1239,6 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 		for i := 0; i < maxEntries; i++ {
 			lines = append(lines, activityStyle.Render(activity.FormatEntry(entries[i])))
-		}
-	} else if s.FirstMsg != "" {
-		// Fallback: show first user message when no pane capture or activity
-		lines = append(lines, "")
-		msgLines := wrapText(s.FirstMsg, contentWidth)
-		maxLines := m.activityLines()
-		if len(msgLines) > maxLines {
-			msgLines = msgLines[:maxLines]
-		}
-		for _, ml := range msgLines {
-			lines = append(lines, dimStyle.Render(ml))
 		}
 	}
 
