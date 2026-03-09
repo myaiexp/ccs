@@ -799,10 +799,15 @@ func (m *Model) detailPaneLines() int {
 		hasPaneCapture = true
 	}
 
-	if hasPaneCapture || len(entries) > 0 {
+	if hasPaneCapture || len(entries) > 0 || s.FirstMsg != "" {
 		actCount := m.activityLines()
-		if !hasPaneCapture && actCount > len(entries) {
+		if !hasPaneCapture && len(entries) > 0 && actCount > len(entries) {
 			actCount = len(entries)
+		} else if !hasPaneCapture && len(entries) == 0 && s.FirstMsg != "" {
+			msgLines := len(wrapText(s.FirstMsg, m.width-8))
+			if msgLines < actCount {
+				actCount = msgLines
+			}
 		}
 		base += 1 + actCount // blank + activity lines
 	}
@@ -1240,6 +1245,17 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 		for i := 0; i < maxEntries; i++ {
 			lines = append(lines, activityStyle.Render(activity.FormatEntry(entries[i])))
+		}
+	} else if s.FirstMsg != "" {
+		// Fallback: show first user message when no pane capture or activity
+		lines = append(lines, "")
+		msgLines := wrapText(s.FirstMsg, contentWidth)
+		maxLines := m.activityLines()
+		if len(msgLines) > maxLines {
+			msgLines = msgLines[:maxLines]
+		}
+		for _, ml := range msgLines {
+			lines = append(lines, dimStyle.Render(ml))
 		}
 	}
 
