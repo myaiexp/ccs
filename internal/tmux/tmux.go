@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -48,6 +49,23 @@ func selectWindowArgs(windowID string) []string {
 func SelectWindow(windowID string) error {
 	args := selectWindowArgs(windowID)
 	return exec.Command("tmux", args...).Run()
+}
+
+// CapturePaneContent captures the last N lines of a tmux window's visible output.
+// Returns raw terminal output with trailing empty lines trimmed.
+func CapturePaneContent(windowID string, lines int) (string, error) {
+	if lines <= 0 {
+		lines = 30
+	}
+	args := []string{"capture-pane", "-t", windowID, "-p", "-S", fmt.Sprintf("-%d", lines)}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	content := string(out)
+	// Trim trailing empty lines
+	content = strings.TrimRight(content, "\n")
+	return content, nil
 }
 
 // WindowExists checks whether a tmux window with the given ID exists.

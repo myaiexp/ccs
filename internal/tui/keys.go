@@ -17,7 +17,7 @@ type keyMap struct {
 	Reverse key.Binding
 	Hide    key.Binding
 	Hidden  key.Binding
-	Inline  key.Binding
+	Follow  key.Binding
 	Help    key.Binding
 	Quit    key.Binding
 }
@@ -79,9 +79,9 @@ var keys = keyMap{
 		key.WithKeys("h"),
 		key.WithHelp("h", "show hidden"),
 	),
-	Inline: key.NewBinding(
-		key.WithKeys("o"),
-		key.WithHelp("o", "inline"),
+	Follow: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "follow"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("?"),

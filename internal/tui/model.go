@@ -17,7 +17,6 @@ import (
 	"ccs/internal/config"
 	"ccs/internal/project"
 	"ccs/internal/session"
-	"ccs/internal/tmux"
 	"ccs/internal/types"
 	"ccs/internal/watcher"
 )
@@ -31,8 +30,6 @@ const (
 )
 
 // Messages for launching sessions.
-type LaunchResumeMsg struct{ Session types.Session }
-type LaunchNewMsg struct{ Project types.Project }
 type RefreshMsg struct{}
 type ActivityUpdateMsg struct {
 	SessionID string
@@ -59,9 +56,7 @@ type Model struct {
 	confirmSess  *types.Session
 	width        int
 	height       int
-	launching    bool
 	errMsg       string
-	hubMode      bool
 	pendingG     bool // true when 'g' was pressed, waiting for second 'g'
 	sortField    types.SortField
 	sortDir      types.SortDir
@@ -89,7 +84,6 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 		config:       cfg,
 		filter:       ti,
 		focus:        FocusSessions,
-		hubMode:      tmux.InTmux(),
 		sortField:    types.SortByTime,
 		sortDir:      types.SortDesc,
 		tracker:      tracker,
@@ -125,21 +119,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-
-	case LaunchResumeMsg:
-		m.launching = true
-		return m, LaunchResume(msg.Session, m.config.ClaudeFlags, m.tracker)
-
-	case LaunchNewMsg:
-		m.launching = true
-		return m, LaunchNew(msg.Project, m.config.ClaudeFlags, m.tracker)
-
-	case ExecFinishedMsg:
-		m.launching = false
-		if msg.Err != nil {
-			m.errMsg = fmt.Sprintf("Launch error: %v", msg.Err)
-		}
-		return m, refreshCmd()
 
 	case TmuxLaunchDoneMsg:
 		if msg.Err != nil {
@@ -294,16 +273,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		idx := n - 1
 		if idx < len(m.filtered) {
 			sess := m.filtered[idx]
-			if m.hubMode {
-				tmuxWindows := m.tracker.TmuxWindowIDs()
-				if wid, ok := tmuxWindows[sess.ID]; ok {
-					return m, TmuxSwitch(wid)
-				}
-				return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
+			tmuxWindows := m.tracker.TmuxWindowIDs()
+			if wid, ok := tmuxWindows[sess.ID]; ok {
+				return m, TmuxSwitch(wid)
 			}
-			return m, func() tea.Msg {
-				return LaunchResumeMsg{Session: sess}
-			}
+			return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
 		}
 		return m, nil
 	}
@@ -346,9 +320,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		return m.handleEnter()
-
-	case "o":
-		return m.handleInlineEnter()
 
 	case "n":
 		m.focus = FocusProjects
@@ -472,13 +443,6 @@ func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 }
 
 func (m Model) handleEnter() (Model, tea.Cmd) {
-	if m.hubMode {
-		return m.handleHubEnter()
-	}
-	return m.handleInlineEnter()
-}
-
-func (m Model) handleHubEnter() (Model, tea.Cmd) {
 	if m.focus == FocusSessions && len(m.filtered) > 0 {
 		sess := m.filtered[m.sessionIdx]
 		// Check if session has a tmux window — switch to it
@@ -492,22 +456,6 @@ func (m Model) handleHubEnter() (Model, tea.Cmd) {
 	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
 		proj := m.filteredProj[m.projectIdx]
 		return m, TmuxLaunchNew(proj, m.config.ClaudeFlags, m.tracker)
-	}
-	return m, nil
-}
-
-func (m Model) handleInlineEnter() (Model, tea.Cmd) {
-	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		sess := m.filtered[m.sessionIdx]
-		return m, func() tea.Msg {
-			return LaunchResumeMsg{Session: sess}
-		}
-	}
-	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
-		proj := m.filteredProj[m.projectIdx]
-		return m, func() tea.Msg {
-			return LaunchNewMsg{Project: proj}
-		}
 	}
 	return m, nil
 }
@@ -800,10 +748,6 @@ func (m *Model) detailPaneLines() int {
 
 // View renders the full TUI.
 func (m Model) View() string {
-	if m.launching {
-		return ""
-	}
-
 	if m.showHelp {
 		return m.renderHelp()
 	}
@@ -1211,11 +1155,7 @@ func (m Model) renderProjects() string {
 func (m Model) renderFooter() string {
 	var hints []string
 	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		if m.hubMode {
-			hints = append(hints, "enter switch/resume", "o inline")
-		} else {
-			hints = append(hints, "enter/1-9 resume")
-		}
+		hints = append(hints, "enter switch/resume")
 	}
 	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
 		hints = append(hints, "enter new")
