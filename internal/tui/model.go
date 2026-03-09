@@ -590,7 +590,7 @@ func (m *Model) applyFilter() {
 	// Fuzzy filter sessions
 	targets := make([]string, len(source))
 	for i, s := range source {
-		targets[i] = s.ProjectName + " " + s.Title
+		targets[i] = s.ProjectName + " " + s.SessionName + " " + s.Title
 	}
 	matches := fuzzy.Find(query, targets)
 	m.filtered = make([]types.Session, len(matches))
@@ -1024,6 +1024,15 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		projName = projName[:19] + "…"
 	}
 
+	// Session name (from /session-name)
+	sessName := ""
+	if s.SessionName != "" {
+		sessName = s.SessionName
+		if len(sessName) > 30 {
+			sessName = sessName[:29] + "…"
+		}
+	}
+
 	// Context %
 	ctxStr := fmt.Sprintf("%d%%", s.ContextPct)
 
@@ -1057,9 +1066,15 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 	}
 	rightWidth := lipgloss.Width(rightSide)
 
-	// Left side: dot(1) + space(1) + num(4) + space(1) + proj(natural) + gap(2)
+	// Left side: dot(1) + space(1) + num(4) + space(1) + proj(natural) + gap(2) [+ sessName + gap(2)]
 	projWidth := lipgloss.Width(projName)
-	leftFixed := 7 + projWidth + 2 // dot+space+num+space + proj + gap
+	sessNameWidth := 0
+	sessNamePart := ""
+	if sessName != "" {
+		sessNamePart = lipgloss.NewStyle().Foreground(lipgloss.Color("183")).Render(sessName)
+		sessNameWidth = lipgloss.Width(sessNamePart) + 2 // + gap before title
+	}
+	leftFixed := 7 + projWidth + 2 + sessNameWidth // dot+space+num+space + proj + gap + sessName + gap
 	// Content area inside outer border: width - border(2) - padding(2) = width - 4
 	contentWidth := m.width - 4
 	// Title gets whatever space remains, minus gap(2) before right side
@@ -1077,7 +1092,12 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		title += "…"
 	}
 
-	leftSide := fmt.Sprintf("%s %s %s  %s", dot, num, projName, title)
+	var leftSide string
+	if sessName != "" {
+		leftSide = fmt.Sprintf("%s %s %s  %s  %s", dot, num, projName, sessNamePart, title)
+	} else {
+		leftSide = fmt.Sprintf("%s %s %s  %s", dot, num, projName, title)
+	}
 	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
 		gap = 1
@@ -1119,12 +1139,18 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
-	// Header line: session name (left) + title fills the rest
+	// Header line: project name + session name (if any) + title
 	projName := s.ProjectName
 	projPart := detailValueStyle.Render(projName) + "  "
-	projWidth := lipgloss.Width(projPart)
+	headerLeft := projPart
 
-	maxTitleWidth := contentWidth - projWidth
+	if s.SessionName != "" {
+		sessNamePart := lipgloss.NewStyle().Foreground(lipgloss.Color("183")).Render(s.SessionName) + "  "
+		headerLeft += sessNamePart
+	}
+	headerLeftWidth := lipgloss.Width(headerLeft)
+
+	maxTitleWidth := contentWidth - headerLeftWidth
 	if maxTitleWidth < 10 {
 		maxTitleWidth = 10
 	}
@@ -1135,7 +1161,7 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 		title += "…"
 	}
-	headerLine := projPart + detailValueStyle.Render(title)
+	headerLine := headerLeft + detailValueStyle.Render(title)
 
 	// Info line: dir/session-name + messages + size + ctx% + time
 	sizeStr := formatSize(s.FileSize)

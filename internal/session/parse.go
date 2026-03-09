@@ -22,6 +22,7 @@ type jsonLine struct {
 	Timestamp string      `json:"timestamp"`
 	IsMeta    bool        `json:"isMeta"`
 	Subtype   string      `json:"subtype"`
+	Content   string      `json:"content"` // top-level content for system messages
 	Message   jsonMessage `json:"message"`
 }
 
@@ -66,7 +67,7 @@ func ParseSession(fpath string) (*types.Session, error) {
 	sessionID := strings.TrimSuffix(filepath.Base(fpath), ".jsonl")
 
 	var (
-		title        string
+		sessionName  string // explicit name from /session-name
 		fallbackText string
 		msgCount     int
 		lastUsage    *jsonUsage
@@ -96,7 +97,7 @@ func ParseSession(fpath string) (*types.Session, error) {
 			// Check for rename in content (must check every line, not just when title is empty)
 			contentStr := extractContentString(&entry)
 			if m := renamedRe.FindStringSubmatch(contentStr); m != nil {
-				title = strings.TrimSpace(m[1])
+				sessionName = strings.TrimSpace(m[1])
 			}
 			// Track fallback: first non-meta user message with string content
 			if fallbackText == "" && !entry.IsMeta {
@@ -106,9 +107,13 @@ func ParseSession(fpath string) (*types.Session, error) {
 			}
 
 		case "system":
-			contentStr := extractContentString(&entry)
+			// System messages store content at top level, not under message.content
+			contentStr := entry.Content
+			if contentStr == "" {
+				contentStr = extractContentString(&entry)
+			}
 			if m := renamedRe.FindStringSubmatch(contentStr); m != nil {
-				title = strings.TrimSpace(m[1])
+				sessionName = strings.TrimSpace(m[1])
 			}
 
 		case "assistant":
@@ -128,15 +133,15 @@ func ParseSession(fpath string) (*types.Session, error) {
 		firstMsg = cleanFirstMsg(fallbackText)
 	}
 
-	// Resolve title
-	if title == "" {
-		if fallbackText != "" {
-			title = cleanTitle(fallbackText)
-		} else {
-			title = "(untitled)"
-		}
-	} else {
-		title = cleanTitle(title)
+	// Resolve title (always from first user message)
+	title := "(untitled)"
+	if fallbackText != "" {
+		title = cleanTitle(fallbackText)
+	}
+
+	// Clean session name if present
+	if sessionName != "" {
+		sessionName = cleanTitle(sessionName)
 	}
 
 	// Context %
@@ -152,16 +157,17 @@ func ParseSession(fpath string) (*types.Session, error) {
 	}
 
 	return &types.Session{
-		ID:         sessionID,
-		ShortID:    shortID,
-		Title:      title,
-		FirstMsg:   firstMsg,
-		FilePath:   fpath,
-		FileSize:   info.Size(),
-		ContextPct: contextPct,
-		MsgCount:   msgCount,
-		CreatedAt:  createdAt,
-		LastActive: info.ModTime(),
+		ID:          sessionID,
+		ShortID:     shortID,
+		SessionName: sessionName,
+		Title:       title,
+		FirstMsg:    firstMsg,
+		FilePath:    fpath,
+		FileSize:    info.Size(),
+		ContextPct:  contextPct,
+		MsgCount:    msgCount,
+		CreatedAt:   createdAt,
+		LastActive:  info.ModTime(),
 	}, nil
 }
 
@@ -232,9 +238,6 @@ func cleanTitle(s string) string {
 	// Strip leading list/quote markers
 	s = strings.TrimLeft(s, "->+ ")
 	s = strings.TrimSpace(s)
-	if len(s) > 80 {
-		s = s[:80]
-	}
 	return s
 }
 

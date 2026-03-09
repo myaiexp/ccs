@@ -193,8 +193,55 @@ func TestParseSession_WithRename(t *testing.T) {
 		t.Fatalf("ParseSession failed: %v", err)
 	}
 
-	if sess.Title != "my-cool-session" {
-		t.Errorf("Title = %q, want %q", sess.Title, "my-cool-session")
+	if sess.SessionName != "my-cool-session" {
+		t.Errorf("SessionName = %q, want %q", sess.SessionName, "my-cool-session")
+	}
+	if sess.Title != "Initial question about Go" {
+		t.Errorf("Title = %q, want %q", sess.Title, "Initial question about Go")
+	}
+}
+
+func TestParseSession_WithSystemRename(t *testing.T) {
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "sysrename-session.jsonl")
+
+	lines := []map[string]any{
+		{
+			"type":      "user",
+			"sessionId": "sysren1234-5678-9abc-def0-123456789abc",
+			"isMeta":    false,
+			"message": map[string]any{
+				"role":    "user",
+				"content": "Help me with something",
+			},
+		},
+		{
+			"type":      "system",
+			"subtype":   "local_command",
+			"sessionId": "sysren1234-5678-9abc-def0-123456789abc",
+			"content":   "<local-command-stdout>Session renamed to: my-system-session</local-command-stdout>",
+			"timestamp": "2026-03-09T17:34:22.325Z",
+		},
+	}
+
+	f, _ := os.Create(fpath)
+	for _, line := range lines {
+		b, _ := json.Marshal(line)
+		f.Write(b)
+		f.Write([]byte("\n"))
+	}
+	f.Close()
+
+	sess, err := ParseSession(fpath)
+	if err != nil {
+		t.Fatalf("ParseSession failed: %v", err)
+	}
+
+	if sess.SessionName != "my-system-session" {
+		t.Errorf("SessionName = %q, want %q", sess.SessionName, "my-system-session")
+	}
+	if sess.Title != "Help me with something" {
+		t.Errorf("Title = %q, want %q", sess.Title, "Help me with something")
 	}
 }
 
@@ -404,7 +451,7 @@ func TestCleanTitle(t *testing.T) {
 		{"list item", "- list item", "list item"},
 		{"quoted text", "> quoted text", "quoted text"},
 		{"html tags", "<b>hello</b>", "hello"},
-		{"long string truncated to 80", long, long[:80]},
+		{"long string not truncated", long, long},
 		{"real heading with em dash", "# PoE Hub Integration — Implementation Plan", "PoE Hub Integration — Implementation Plan"},
 		{"empty string", "", ""},
 	}

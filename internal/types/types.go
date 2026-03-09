@@ -16,6 +16,7 @@ type Session struct {
 	ShortID      string
 	ProjectName  string
 	ProjectDir   string
+	SessionName  string // Explicit name from /session-name (empty if not renamed)
 	Title        string
 	FirstMsg     string // Full first user message (up to 500 chars, for detail pane)
 	ContextPct   int
