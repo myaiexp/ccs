@@ -113,15 +113,18 @@ func stripTrailingNoise(content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// isSpinnerLine detects Claude's activity spinner lines (✻ Thinking..., ✻ Churned for Xm Xs, etc).
+// isSpinnerLine detects Claude's activity spinner lines (✻ Thinking..., * Contemplating..., etc).
+// The spinner animates through: ✻ (U+273B) → * (U+002A) → · (U+00B7) and similar chars.
 func isSpinnerLine(line string) bool {
 	for _, r := range line {
 		if r == ' ' {
 			continue
 		}
-		// ✻ U+273B, ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ braille spinner chars (U+2800-U+28FF)
-		return r == '✻' || r == '⠋' || r == '⠙' || r == '⠹' || r == '⠸' ||
-			r == '⠼' || r == '⠴' || r == '⠦' || r == '⠧' || r == '⠇' || r == '⠏'
+		// Asterisk-like spinner chars at various animation frames
+		return r == '*' || r == '✻' || r == '✱' || r == '✳' || r == '·' ||
+			r == '•' || r == '∗' ||
+			// Braille spinner chars (U+2800-U+28FF)
+			(r >= 0x2800 && r <= 0x28FF)
 	}
 	return false
 }
