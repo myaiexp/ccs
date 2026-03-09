@@ -21,6 +21,11 @@ func TestDecodeProjectDir(t *testing.T) {
 		{"-home-mase", "~", "/home/mase"},
 		{"-home-mase--hermes", ".hermes", "/home/mase/.hermes"},
 		{"-home-mse-Projects-ccs", "ccs", "/home/mse/Projects/ccs"},
+		// macOS paths
+		{"-Users-john-Projects-myapp", "myapp", "/Users/john/Projects/myapp"},
+		{"-Users-john", "~", "/Users/john"},
+		{"-Users-john--config", ".config", "/Users/john/.config"},
+		{"-Users-john-Documents-work", "Documents-work", "/Users/john/Documents-work"},
 	}
 
 	for _, tt := range tests {

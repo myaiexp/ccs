@@ -62,7 +62,9 @@ func (t *trackedCmd) SetStderr(w io.Writer) {
 // LaunchResume returns a tea.Cmd that runs claude --resume <id>
 // in the correct project directory. TUI suspends and resumes on exit.
 func LaunchResume(sess types.Session, flags []string, tracker *session.Tracker) tea.Cmd {
-	args := append(flags, "--resume", sess.ID)
+	args := make([]string, len(flags), len(flags)+2)
+	copy(args, flags)
+	args = append(args, "--resume", sess.ID)
 	c := exec.Command("claude", args...)
 	c.Dir = sess.ProjectDir
 	return tea.Exec(&trackedCmd{
@@ -103,7 +105,11 @@ func tmuxWindowName(proj, title string) string {
 func TmuxLaunchResume(sess types.Session, flags []string, tracker *session.Tracker) tea.Cmd {
 	return func() tea.Msg {
 		name := tmuxWindowName(sess.ProjectName, sess.Title)
-		cmd := append([]string{"claude"}, append(flags, "--resume", sess.ID)...)
+		resumeArgs := make([]string, 0, len(flags)+3)
+		resumeArgs = append(resumeArgs, "claude")
+		resumeArgs = append(resumeArgs, flags...)
+		resumeArgs = append(resumeArgs, "--resume", sess.ID)
+		cmd := resumeArgs
 		windowID, err := tmux.NewWindow(name, sess.ProjectDir, cmd)
 		if err != nil {
 			return TmuxLaunchDoneMsg{Err: err}
@@ -120,7 +126,9 @@ func TmuxLaunchNew(proj types.Project, flags []string, tracker *session.Tracker)
 		if len(name) > 30 {
 			name = name[:30]
 		}
-		cmd := append([]string{"claude"}, flags...)
+		cmd := make([]string, 0, len(flags)+1)
+		cmd = append(cmd, "claude")
+		cmd = append(cmd, flags...)
 		_, err := tmux.NewWindow(name, proj.Dir, cmd)
 		if err != nil {
 			return TmuxLaunchDoneMsg{Err: err}

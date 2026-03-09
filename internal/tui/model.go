@@ -60,7 +60,9 @@ type Model struct {
 	width        int
 	height       int
 	launching    bool
+	errMsg       string
 	hubMode      bool
+	pendingG     bool // true when 'g' was pressed, waiting for second 'g'
 	sortField    types.SortField
 	sortDir      types.SortDir
 	tracker      *session.Tracker
@@ -134,9 +136,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ExecFinishedMsg:
 		m.launching = false
+		if msg.Err != nil {
+			m.errMsg = fmt.Sprintf("Launch error: %v", msg.Err)
+		}
 		return m, refreshCmd()
 
 	case TmuxLaunchDoneMsg:
+		if msg.Err != nil {
+			m.errMsg = fmt.Sprintf("Tmux launch error: %v", msg.Err)
+		}
 		return m, refreshCmd()
 
 	case TmuxSwitchDoneMsg:
@@ -178,6 +186,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m, tea.Quit
 	}
+
+	// Clear any error message on keypress
+	m.errMsg = ""
 
 	// When filtering, most keys go to the text input
 	if m.filtering {
@@ -263,6 +274,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle pending 'g' for gg (go to top)
+	if m.pendingG {
+		m.pendingG = false
+		if key == "g" {
+			if m.focus == FocusSessions {
+				m.sessionIdx = 0
+			} else {
+				m.projectIdx = 0
+			}
+			return m, nil
+		}
+		// Not 'g' — fall through to normal key handling
+	}
+
 	// Number shortcuts: 1-9 launch the Nth session in the sorted list.
 	if key >= "1" && key <= "9" {
 		n := int(key[0] - '0')
@@ -300,6 +325,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "down", "j":
 		return m.handleNavigation("down")
+
+	case "G":
+		if m.focus == FocusSessions && len(m.filtered) > 0 {
+			m.sessionIdx = len(m.filtered) - 1
+		} else if m.focus == FocusProjects && len(m.filteredProj) > 0 {
+			m.projectIdx = len(m.filteredProj) - 1
+		}
+		return m, nil
+
+	case "g":
+		m.pendingG = true
+		return m, nil
 
 	case "left":
 		return m.handleNavigation("left")
@@ -775,8 +812,6 @@ func (m Model) View() string {
 		return m.renderPrefs()
 	}
 
-	availHeight := m.height - 2 // outer border
-
 	var sections []string
 
 	// Title + filter + sort indicator
@@ -794,41 +829,8 @@ func (m Model) View() string {
 	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
 	sections = append(sections, sessHeader)
 
-	// Calculate how many session rows fit.
-	// Count actual lines consumed by non-session sections:
-	// header(1) + sess header with margin(2) + scroll indicator(1) +
-	// proj header with margin(2) + footer with margin(2) = 8 fixed
-	// Plus project grid rows (estimate from actual data)
-	projGridRows := len(m.projectGrid())
-	if projGridRows == 0 {
-		projGridRows = 1
-	}
-	fixedOverhead := 8 + projGridRows
-	if showDetail {
-		fixedOverhead += m.detailPaneLines()
-	}
-	maxRows := availHeight - fixedOverhead
-	if maxRows < 3 {
-		maxRows = 3
-	}
-	if maxRows > len(m.filtered) {
-		maxRows = len(m.filtered)
-	}
-
-	// Center-scroll: keep selection in the middle of the visible window,
-	// except at the start/end of the list where it naturally pins.
-	half := maxRows / 2
-	start := m.sessionIdx - half
-	if start < 0 {
-		start = 0
-	}
-	if start > len(m.filtered)-maxRows {
-		start = max(0, len(m.filtered)-maxRows)
-	}
-	end := start + maxRows
-	if end > len(m.filtered) {
-		end = len(m.filtered)
-	}
+	start, end := m.scrollWindow()
+	maxRows := end - start
 
 	if len(m.filtered) == 0 {
 		sections = append(sections, dimStyle.Render("  no sessions"))
@@ -853,8 +855,15 @@ func (m Model) View() string {
 	sections = append(sections, projHeader)
 	sections = append(sections, m.renderProjects())
 
-	// Footer / confirmation
-	if m.confirming && m.confirmSess != nil {
+	// Footer / confirmation / error
+	if m.errMsg != "" {
+		errLine := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true).
+			MarginTop(1).
+			Render(m.errMsg)
+		sections = append(sections, errLine)
+	} else if m.confirming && m.confirmSess != nil {
 		title := m.confirmSess.Title
 		if len(title) > 40 {
 			title = title[:39] + "…"
@@ -871,11 +880,12 @@ func (m Model) View() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 
+	bs := borderStyle
 	if m.width > 0 {
-		borderStyle = borderStyle.Width(m.width - 2)
+		bs = bs.Width(m.width - 2)
 	}
 
-	return borderStyle.Render(content)
+	return bs.Render(content)
 }
 
 // renderSession renders a non-selected session row. visNum is the window-local
@@ -1235,6 +1245,7 @@ func (m Model) renderHelp() string {
 		"  esc         Clear filter / exit filter",
 		"  tab         Switch: sessions ↔ projects",
 		"  j/k ↑/↓     Navigate (↑↓←→ in projects)",
+		"  gg/G        Jump to top/bottom",
 		"  s           Cycle sort: time → ctx% → size → name",
 		"  r           Reverse sort direction",
 		"  d           Delete session (with confirm)",

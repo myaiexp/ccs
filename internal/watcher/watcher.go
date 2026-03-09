@@ -30,6 +30,7 @@ type Watcher struct {
 	updates       chan ActivityUpdate
 	activityLines int
 	done          chan struct{}
+	stopped       chan struct{} // closed by Run() when it exits
 	closeOnce     sync.Once
 }
 
@@ -47,6 +48,7 @@ func New(activityLines int) (*Watcher, error) {
 		updates:       make(chan ActivityUpdate, 100),
 		activityLines: activityLines,
 		done:          make(chan struct{}),
+		stopped:       make(chan struct{}),
 	}, nil
 }
 
@@ -100,6 +102,8 @@ func (w *Watcher) Updates() <-chan ActivityUpdate {
 // Run processes fsnotify events, debouncing writes per file path.
 // It should be called in a goroutine.
 func (w *Watcher) Run() {
+	defer close(w.stopped)
+
 	const debounceInterval = 200 * time.Millisecond
 
 	// Per-file debounce timers.
@@ -166,11 +170,10 @@ func (w *Watcher) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)
 		_ = w.fw.Close()
-		// Give Run() a moment to exit, then close updates channel.
-		// The channel close is safe because Run() is the only sender.
+		// Wait for Run() to exit before closing the updates channel.
+		// Run() is the only sender, so this is safe once it has stopped.
 		go func() {
-			// Small delay to let Run() drain.
-			time.Sleep(50 * time.Millisecond)
+			<-w.stopped
 			close(w.updates)
 		}()
 	})

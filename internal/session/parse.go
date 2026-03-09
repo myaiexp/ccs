@@ -92,17 +92,15 @@ func ParseSession(fpath string) (*types.Session, error) {
 		switch entry.Type {
 		case "user":
 			msgCount++
-			// Check for rename in content
-			if title == "" || true {
-				contentStr := extractContentString(&entry)
-				if m := renamedRe.FindStringSubmatch(contentStr); m != nil {
-					title = strings.TrimSpace(m[1])
-				}
-				// Track fallback: first non-meta user message with string content
-				if fallbackText == "" && !entry.IsMeta {
-					if s := getStringContent(&entry); s != "" {
-						fallbackText = s
-					}
+			// Check for rename in content (must check every line, not just when title is empty)
+			contentStr := extractContentString(&entry)
+			if m := renamedRe.FindStringSubmatch(contentStr); m != nil {
+				title = strings.TrimSpace(m[1])
+			}
+			// Track fallback: first non-meta user message with string content
+			if fallbackText == "" && !entry.IsMeta {
+				if s := getStringContent(&entry); s != "" {
+					fallbackText = s
 				}
 			}
 
@@ -415,40 +413,57 @@ func DecodeProjectDir(encoded string) (name string, absPath string) {
 		return "", ""
 	}
 
-	// Pattern: -home-{user}-Projects-{rest}
-	// The rest (which may contain dashes) is the project dir name.
-	if m := projectsRe.FindStringSubmatch(encoded); m != nil {
-		user := m[1]
-		rest := m[2]
-		absPath = "/home/" + user + "/Projects/" + rest
-		name = rest
-		return
+	// Try both Linux (/home/) and macOS (/Users/) prefixes
+	type homePrefix struct {
+		dir string // "/home/" or "/Users/"
+		re  struct {
+			projects, dotDir, homeDir, homeSubdir *regexp.Regexp
+		}
+	}
+	prefixes := []homePrefix{
+		{dir: "/home/", re: struct {
+			projects, dotDir, homeDir, homeSubdir *regexp.Regexp
+		}{projectsRe, dotDirRe, homeDirRe, homeSubdirRe}},
+		{dir: "/Users/", re: struct {
+			projects, dotDir, homeDir, homeSubdir *regexp.Regexp
+		}{macProjectsRe, macDotDirRe, macHomeDirRe, macHomeSubdirRe}},
 	}
 
-	// Pattern: -home-{user}--{rest} → dot-prefixed dir in home
-	if m := dotDirRe.FindStringSubmatch(encoded); m != nil {
-		user := m[1]
-		rest := m[2]
-		absPath = "/home/" + user + "/." + rest
-		name = "." + rest
-		return
-	}
+	for _, pfx := range prefixes {
+		// Pattern: -{prefix}-{user}-Projects-{rest}
+		if m := pfx.re.projects.FindStringSubmatch(encoded); m != nil {
+			user := m[1]
+			rest := m[2]
+			absPath = pfx.dir + user + "/Projects/" + rest
+			name = rest
+			return
+		}
 
-	// Pattern: -home-{user} exactly → home dir
-	if m := homeDirRe.FindStringSubmatch(encoded); m != nil {
-		user := m[1]
-		absPath = "/home/" + user
-		name = "~"
-		return
-	}
+		// Pattern: -{prefix}-{user}--{rest} → dot-prefixed dir in home
+		if m := pfx.re.dotDir.FindStringSubmatch(encoded); m != nil {
+			user := m[1]
+			rest := m[2]
+			absPath = pfx.dir + user + "/." + rest
+			name = "." + rest
+			return
+		}
 
-	// Pattern: -home-{user}-{rest} → subdir of home (e.g., Apps, Videos)
-	if m := homeSubdirRe.FindStringSubmatch(encoded); m != nil {
-		user := m[1]
-		rest := m[2]
-		absPath = "/home/" + user + "/" + rest
-		name = rest
-		return
+		// Pattern: -{prefix}-{user} exactly → home dir
+		if m := pfx.re.homeDir.FindStringSubmatch(encoded); m != nil {
+			user := m[1]
+			absPath = pfx.dir + user
+			name = "~"
+			return
+		}
+
+		// Pattern: -{prefix}-{user}-{rest} → subdir of home
+		if m := pfx.re.homeSubdir.FindStringSubmatch(encoded); m != nil {
+			user := m[1]
+			rest := m[2]
+			absPath = pfx.dir + user + "/" + rest
+			name = rest
+			return
+		}
 	}
 
 	// Fallback: replace leading dash, split on remaining dashes as path components
@@ -459,12 +474,15 @@ func DecodeProjectDir(encoded string) (name string, absPath string) {
 }
 
 var (
-	// Matches -home-{user}-Projects-{project-name-with-possible-dashes}
-	projectsRe = regexp.MustCompile(`^-home-([^-]+)-Projects-(.+)$`)
-	// Matches -home-{user}--{dotdir} (double dash = dot prefix)
-	dotDirRe = regexp.MustCompile(`^-home-([^-]+)--(.+)$`)
-	// Matches -home-{user} exactly
-	homeDirRe = regexp.MustCompile(`^-home-([^-]+)$`)
-	// Matches -home-{user}-{subdir} (anything under home that's not Projects)
+	// Linux: -home-{user}-...
+	projectsRe   = regexp.MustCompile(`^-home-([^-]+)-Projects-(.+)$`)
+	dotDirRe     = regexp.MustCompile(`^-home-([^-]+)--(.+)$`)
+	homeDirRe    = regexp.MustCompile(`^-home-([^-]+)$`)
 	homeSubdirRe = regexp.MustCompile(`^-home-([^-]+)-(.+)$`)
+
+	// macOS: -Users-{user}-...
+	macProjectsRe   = regexp.MustCompile(`^-Users-([^-]+)-Projects-(.+)$`)
+	macDotDirRe     = regexp.MustCompile(`^-Users-([^-]+)--(.+)$`)
+	macHomeDirRe    = regexp.MustCompile(`^-Users-([^-]+)$`)
+	macHomeSubdirRe = regexp.MustCompile(`^-Users-([^-]+)-(.+)$`)
 )
