@@ -1018,10 +1018,10 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 	numStr := fmt.Sprintf("%4d", visNum)
 	num := numStyle.Render(numStr)
 
-	// Project name (truncate if needed)
+	// Project name (natural width, truncate only if very long)
 	projName := s.ProjectName
-	if len(projName) > 14 {
-		projName = projName[:13] + "…"
+	if len(projName) > 20 {
+		projName = projName[:19] + "…"
 	}
 
 	// Context %
@@ -1057,8 +1057,9 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 	}
 	rightWidth := lipgloss.Width(rightSide)
 
-	// Left side fixed parts: dot(1) + space(1) + num(4) + space(1) + proj(14) + gap(2) = 23
-	leftFixed := 23
+	// Left side: dot(1) + space(1) + num(4) + space(1) + proj(natural) + gap(2)
+	projWidth := lipgloss.Width(projName)
+	leftFixed := 7 + projWidth + 2 // dot+space+num+space + proj + gap
 	// Content area inside outer border: width - border(2) - padding(2) = width - 4
 	contentWidth := m.width - 4
 	// Title gets whatever space remains, minus gap(2) before right side
@@ -1076,7 +1077,7 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		title += "…"
 	}
 
-	leftSide := fmt.Sprintf("%s %s %-14s  %s", dot, num, projName, title)
+	leftSide := fmt.Sprintf("%s %s %s  %s", dot, num, projName, title)
 	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
 		gap = 1
@@ -1136,15 +1137,15 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 	headerLine := projPart + detailValueStyle.Render(title)
 
-	// Info line: dir + messages + size + ctx% + time + ID
+	// Info line: dir/session-name + messages + size + ctx% + time
 	sizeStr := formatSize(s.FileSize)
 	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
 	timePart := dimStyle.Render(formatDuration(s.LastActive))
-	infoLine := dimStyle.Render(s.ProjectDir) + "  " +
+	dirWithSession := s.ProjectDir + "/" + s.ID
+	infoLine := dimStyle.Render(dirWithSession) + "  " +
 		detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " +
 		detailValueStyle.Render(sizeStr) + "  " +
-		ctxPart + " " + timePart + "  " +
-		dimStyle.Render(s.ID)
+		ctxPart + " " + timePart
 
 	lines := []string{
 		headerLine,
