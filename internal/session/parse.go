@@ -405,11 +405,14 @@ func DiscoverSessions(projectsDir string) ([]types.Session, error) {
 
 // DecodeProjectDir converts an encoded directory name to a display name and absolute path.
 // The encoding replaces "/" with "-", making it ambiguous for names containing dashes.
-// We use known prefix patterns to disambiguate (same approach as cc-sessions).
+// Claude Code also encodes "." as "-", so "mase.fi" becomes "mase-fi".
+// We use known prefix patterns to disambiguate (same approach as cc-sessions),
+// then verify the path exists and try dot substitutions if it doesn't.
 //
 // "-home-mse-Projects-poe-proof" → ("poe-proof", "/home/mse/Projects/poe-proof")
 // "-home-mse" → ("~", "/home/mse")
 // "-home-mse--openclaw" → (".openclaw", "/home/mse/.openclaw")
+// "-home-mse-Projects-mase-fi" → ("mase.fi", "/home/mse/Projects/mase.fi")
 func DecodeProjectDir(encoded string) (name string, absPath string) {
 	if encoded == "" {
 		return "", ""
@@ -420,8 +423,14 @@ func DecodeProjectDir(encoded string) (name string, absPath string) {
 	if m := projectsRe.FindStringSubmatch(encoded); m != nil {
 		user := m[1]
 		rest := m[2]
-		absPath = "/home/" + user + "/Projects/" + rest
+		parentDir := "/home/" + user + "/Projects/"
+		absPath = parentDir + rest
 		name = rest
+		// If the decoded path doesn't exist, try dot substitutions in the project name
+		if resolved, ok := resolveWithDots(parentDir, rest); ok {
+			absPath = resolved
+			name = filepath.Base(resolved)
+		}
 		return
 	}
 
@@ -456,6 +465,39 @@ func DecodeProjectDir(encoded string) (name string, absPath string) {
 	parts := strings.Split(encoded[1:], "-")
 	name = parts[len(parts)-1]
 	return
+}
+
+// resolveWithDots handles the ambiguity where Claude Code encodes "." as "-".
+// If the direct path exists, returns false (no resolution needed).
+// Otherwise, tries replacing each dash in the name with a dot to find a match.
+// For example: "mase-fi" → tries "mase.fi" which exists → returns the resolved path.
+func resolveWithDots(parentDir, name string) (string, bool) {
+	direct := parentDir + name
+	if _, err := os.Stat(direct); err == nil {
+		return "", false // direct path exists, no resolution needed
+	}
+
+	// Find positions of dashes in the name
+	dashPositions := []int{}
+	for i, c := range name {
+		if c == '-' {
+			dashPositions = append(dashPositions, i)
+		}
+	}
+	if len(dashPositions) == 0 {
+		return "", false
+	}
+
+	// Try each single-dash-to-dot substitution (most common case: one dot in name)
+	for _, pos := range dashPositions {
+		candidate := name[:pos] + "." + name[pos+1:]
+		path := parentDir + candidate
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+
+	return "", false
 }
 
 var (
