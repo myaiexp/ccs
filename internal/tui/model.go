@@ -555,6 +555,12 @@ func (m *Model) toggleHideSession() {
 }
 
 func (m *Model) applyFilter() {
+	// Remember selected session ID to restore after re-sort
+	var selectedID string
+	if m.sessionIdx < len(m.filtered) {
+		selectedID = m.filtered[m.sessionIdx].ID
+	}
+
 	query := m.filter.Value()
 
 	hiddenSet := make(map[string]bool, len(m.config.HiddenSessions))
@@ -575,7 +581,7 @@ func (m *Model) applyFilter() {
 		}
 		m.filteredProj = filterVisibleProjects(m.projects, m.showHidden)
 		m.sortFiltered()
-		m.clampIndices()
+		m.restoreSelection(selectedID)
 		return
 	}
 
@@ -615,11 +621,26 @@ func (m *Model) applyFilter() {
 	}
 
 	m.sortFiltered()
-	m.clampIndices()
+	m.restoreSelection(selectedID)
 }
 
 func (m *Model) sortAndFilter() {
 	m.applyFilter()
+}
+
+// restoreSelection finds the session with the given ID in the filtered list
+// and sets sessionIdx to it. Falls back to clamping if not found.
+func (m *Model) restoreSelection(id string) {
+	if id != "" {
+		for i, s := range m.filtered {
+			if s.ID == id {
+				m.sessionIdx = i
+				m.clampIndices()
+				return
+			}
+		}
+	}
+	m.clampIndices()
 }
 
 func (m *Model) sortFiltered() {
