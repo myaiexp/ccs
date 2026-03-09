@@ -164,9 +164,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Capture for selected session in detail pane (if different from followed)
-		if sess, ok := m.selectedTmuxSession(); ok && sess.ID != m.followID {
-			if cmd := m.captureCmdForSession(sess.ID); cmd != nil {
-				cmds = append(cmds, cmd)
+		// Captures any session with a tmux window, not just active ones
+		if m.focus == FocusSessions && len(m.filtered) > 0 {
+			sess := m.filtered[m.sessionIdx]
+			if sess.ID != m.followID {
+				if cmd := m.captureCmdForSession(sess.ID); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 		// Always re-subscribe — captures are cheap no-ops when nothing is active
@@ -770,10 +774,8 @@ func (m *Model) detailPaneLines() int {
 
 	entries := m.activities[s.ID]
 	hasPaneCapture := false
-	if s.ActiveSource == types.SourceTmux {
-		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-			hasPaneCapture = true
-		}
+	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+		hasPaneCapture = true
 	}
 
 	if hasPaneCapture || len(entries) > 0 {
@@ -1190,10 +1192,8 @@ func (m Model) renderDetail(s types.Session) string {
 	// Activity / terminal content below status (full width)
 	entries := m.activities[s.ID]
 	hasPaneCapture := false
-	if s.ActiveSource == types.SourceTmux {
-		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-			hasPaneCapture = true
-		}
+	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+		hasPaneCapture = true
 	}
 
 	if hasPaneCapture {
@@ -1203,6 +1203,12 @@ func (m Model) renderDetail(s types.Session) string {
 		maxLines := m.activityLines()
 		if len(paneLines) > maxLines {
 			paneLines = paneLines[len(paneLines)-maxLines:]
+		}
+		// Dim the content for inactive sessions
+		if s.ActiveSource != types.SourceTmux {
+			for i, pl := range paneLines {
+				paneLines[i] = dimStyle.Render(pl)
+			}
 		}
 		lines = append(lines, paneLines...)
 	} else if len(entries) > 0 {
