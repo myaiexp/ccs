@@ -14,6 +14,7 @@ import (
 	"github.com/sahilm/fuzzy"
 
 	"ccs/internal/activity"
+	"ccs/internal/capture"
 	"ccs/internal/config"
 	"ccs/internal/project"
 	"ccs/internal/session"
@@ -36,6 +37,15 @@ type ActivityUpdateMsg struct {
 	Entries   []activity.Entry
 }
 type TickMsg struct{}
+
+// PaneCaptureMsg delivers a pane capture result.
+type PaneCaptureMsg struct {
+	Snapshot capture.PaneSnapshot
+	Err      error
+}
+
+// PaneCaptureTickMsg triggers periodic pane capture polling.
+type PaneCaptureTickMsg struct{}
 
 type Model struct {
 	sessions     []types.Session
@@ -62,7 +72,9 @@ type Model struct {
 	sortDir      types.SortDir
 	tracker      *session.Tracker
 	watcher      *watcher.Watcher
-	activities   map[string][]activity.Entry // sessionID -> recent entries
+	activities   map[string][]activity.Entry    // sessionID -> recent entries
+	followID    string                         // session ID being followed (empty = normal)
+	paneContent map[string]capture.PaneSnapshot // sessionID -> latest snapshot
 }
 
 func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker, w *watcher.Watcher) Model {
@@ -89,6 +101,7 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 		tracker:      tracker,
 		watcher:      w,
 		activities:   make(map[string][]activity.Entry),
+		paneContent:  make(map[string]capture.PaneSnapshot),
 	}
 	m.applyFilter()
 
@@ -96,7 +109,7 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd()}
+	cmds := []tea.Cmd{tickCmd(), paneCaptureTickCmd()}
 
 	if m.watcher != nil {
 		go m.watcher.Run()
@@ -135,6 +148,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, watchCmd(m.watcher)
 		}
 		return m, nil
+
+	case PaneCaptureMsg:
+		if msg.Err == nil {
+			m.paneContent[msg.Snapshot.SessionID] = msg.Snapshot
+		}
+		return m, nil
+
+	case PaneCaptureTickMsg:
+		var cmds []tea.Cmd
+		// Capture for followed session
+		if m.followID != "" {
+			if cmd := m.captureCmdForSession(m.followID); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		// Capture for selected session in detail pane (if different from followed)
+		if sess, ok := m.selectedTmuxSession(); ok && sess.ID != m.followID {
+			if cmd := m.captureCmdForSession(sess.ID); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		// Always re-subscribe — captures are cheap no-ops when nothing is active
+		cmds = append(cmds, paneCaptureTickCmd())
+		return m, tea.Batch(cmds...)
 
 	case TickMsg:
 		cmd := m.handleRefresh()
@@ -363,7 +400,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefsIdx = 0
 		return m, nil
 
+	case "f":
+		return m.handleFollow()
+
 	case "esc":
+		if m.followID != "" {
+			m.followID = ""
+			return m, nil
+		}
 		if m.filter.Value() != "" {
 			m.filter.SetValue("")
 			m.applyFilter()
@@ -458,6 +502,28 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 		return m, TmuxLaunchNew(proj, m.config.ClaudeFlags, m.tracker)
 	}
 	return m, nil
+}
+
+func (m Model) handleFollow() (Model, tea.Cmd) {
+	if m.focus != FocusSessions || len(m.filtered) == 0 {
+		return m, nil
+	}
+	sess := m.filtered[m.sessionIdx]
+
+	// Toggle off if already following this session
+	if m.followID == sess.ID {
+		m.followID = ""
+		return m, nil
+	}
+
+	// Only follow SourceTmux sessions
+	if sess.ActiveSource != types.SourceTmux {
+		m.errMsg = "Can only follow sessions with tmux windows"
+		return m, nil
+	}
+
+	m.followID = sess.ID
+	return m, m.startPaneCapture(sess.ID)
 }
 
 func (m *Model) toggleHideSession() {
@@ -756,6 +822,10 @@ func (m Model) View() string {
 		return m.renderPrefs()
 	}
 
+	if m.followID != "" {
+		return m.renderFollowView()
+	}
+
 	var sections []string
 
 	// Title + filter + sort indicator
@@ -771,6 +841,16 @@ func (m Model) View() string {
 	showDetail := m.focus == FocusSessions && len(m.filtered) > 0
 	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
 	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
+	// Active count
+	activeCount := 0
+	for _, s := range m.filtered {
+		if s.IsActive {
+			activeCount++
+		}
+	}
+	if activeCount > 0 {
+		sessHeader += "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render(fmt.Sprintf("%d active", activeCount))
+	}
 	sections = append(sections, sessHeader)
 
 	start, end := m.scrollWindow()
@@ -821,6 +901,119 @@ func (m Model) View() string {
 	} else {
 		sections = append(sections, m.renderFooter())
 	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	bs := borderStyle
+	if m.width > 0 {
+		bs = bs.Width(m.width - 2)
+	}
+
+	return bs.Render(content)
+}
+
+// renderFollowView renders the split layout: compressed session list + live pane output.
+func (m Model) renderFollowView() string {
+	var sections []string
+
+	// Header
+	header := titleStyle.Render("ccs")
+	sortIndicator := dimStyle.Render(fmt.Sprintf("  sort: %s %s", m.sortField, m.sortDir))
+	header += sortIndicator
+	sections = append(sections, header)
+
+	// Compressed session list — show up to 8 rows without detail pane
+	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
+	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
+	sections = append(sections, sessHeader)
+
+	// Calculate how many session rows fit in top ~40%
+	topRows := (m.height * 40 / 100) - 4 // header(1) + sessHeader(1) + footer(1) + border(1)
+	if topRows < 3 {
+		topRows = 3
+	}
+	if topRows > 8 {
+		topRows = 8
+	}
+	if topRows > len(m.filtered) {
+		topRows = len(m.filtered)
+	}
+
+	// Center scroll around selected
+	half := topRows / 2
+	start := m.sessionIdx - half
+	if start < 0 {
+		start = 0
+	}
+	if start > len(m.filtered)-topRows {
+		start = max(0, len(m.filtered)-topRows)
+	}
+	end := start + topRows
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+
+	if len(m.filtered) == 0 {
+		sections = append(sections, dimStyle.Render("  no sessions"))
+	} else {
+		for i := start; i < end; i++ {
+			sections = append(sections, m.renderSession(i+1, m.filtered[i]))
+		}
+	}
+
+	// Follow pane — bottom portion
+	var followedSess *types.Session
+	for _, s := range m.filtered {
+		if s.ID == m.followID {
+			sess := s
+			followedSess = &sess
+			break
+		}
+	}
+
+	contentWidth := m.width - 6 // outer border(2) + padding(2) + pane border(2)
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+	paneWidth := contentWidth - 2 // pane padding
+
+	// Pane header
+	paneTitle := "Following: "
+	if followedSess != nil {
+		paneTitle += followedSess.ProjectName + " — " + followedSess.Title
+	} else {
+		paneTitle += m.followID
+	}
+	if lipgloss.Width(paneTitle) > paneWidth {
+		paneTitle = paneTitle[:paneWidth-1] + "…"
+	}
+	paneHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99")).Render(paneTitle)
+
+	// Pane content
+	paneText := dimStyle.Render("Waiting for capture...")
+	if snap, ok := m.paneContent[m.followID]; ok && snap.Content != "" {
+		// Show last N lines that fit, bottom-anchored
+		paneLines := strings.Split(snap.Content, "\n")
+		availPaneRows := m.height - len(sections) - 6 // footer(1) + pane border(2) + pane header(2) + margin(1)
+		if availPaneRows < 3 {
+			availPaneRows = 3
+		}
+		if len(paneLines) > availPaneRows {
+			paneLines = paneLines[len(paneLines)-availPaneRows:]
+		}
+		paneText = strings.Join(paneLines, "\n")
+	}
+
+	paneContent := paneHeader + "\n" + paneText
+	paneStyle := followPaneStyle
+	if contentWidth > 0 {
+		paneStyle = paneStyle.Width(contentWidth)
+	}
+	sections = append(sections, paneStyle.Render(paneContent))
+
+	// Follow mode footer
+	followFooter := footerStyle.Render("f unfollow  esc exit  enter switch  / search  ? help  q quit")
+	sections = append(sections, followFooter)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 
@@ -999,10 +1192,18 @@ func (m Model) renderDetail(s types.Session) string {
 
 	// Full first message, word-wrapped
 	entries := m.activities[s.ID]
-	usesTwoColumn := s.IsActive && len(entries) > 0
+
+	// Determine right column content: pane capture for SourceTmux, JSONL activity for SourceProc
+	hasPaneCapture := false
+	if s.ActiveSource == types.SourceTmux {
+		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+			hasPaneCapture = true
+		}
+	}
+	usesTwoColumn := s.IsActive && (hasPaneCapture || len(entries) > 0)
 
 	if usesTwoColumn {
-		// Two-column layout: left (~40%) = info + first message, right (~60%) = activity log
+		// Two-column layout: left (~40%) = info + first message, right (~60%) = live content
 		leftWidth := contentWidth * 40 / 100
 		rightColWidth := contentWidth - leftWidth - 2 // 2 for gap between columns
 		if leftWidth < 30 {
@@ -1023,16 +1224,30 @@ func (m Model) renderDetail(s types.Session) string {
 			}
 		}
 
-		// Right column: activity log
-		maxEntries := m.activityLines()
-		if maxEntries > len(entries) {
-			maxEntries = len(entries)
-		}
+		// Right column: pane capture or activity log
 		var rightLines []string
-		rightLines = append(rightLines, detailLabelStyle.Render("Activity"))
-		rightLines = append(rightLines, "")
-		for i := 0; i < maxEntries; i++ {
-			rightLines = append(rightLines, activityStyle.Render(activity.FormatEntry(entries[i])))
+		if hasPaneCapture {
+			rightLines = append(rightLines, detailLabelStyle.Render("Terminal"))
+			rightLines = append(rightLines, "")
+			snap := m.paneContent[s.ID]
+			paneLines := strings.Split(snap.Content, "\n")
+			maxLines := m.activityLines()
+			if len(paneLines) > maxLines {
+				paneLines = paneLines[len(paneLines)-maxLines:]
+			}
+			for _, pl := range paneLines {
+				rightLines = append(rightLines, pl)
+			}
+		} else {
+			rightLines = append(rightLines, detailLabelStyle.Render("Activity"))
+			rightLines = append(rightLines, "")
+			maxEntries := m.activityLines()
+			if maxEntries > len(entries) {
+				maxEntries = len(entries)
+			}
+			for i := 0; i < maxEntries; i++ {
+				rightLines = append(rightLines, activityStyle.Render(activity.FormatEntry(entries[i])))
+			}
 		}
 
 		// Pad shorter column to match heights
@@ -1155,7 +1370,7 @@ func (m Model) renderProjects() string {
 func (m Model) renderFooter() string {
 	var hints []string
 	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		hints = append(hints, "enter switch/resume")
+		hints = append(hints, "enter switch/resume", "f follow")
 	}
 	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
 		hints = append(hints, "enter new")
@@ -1178,11 +1393,11 @@ func (m Model) renderHelp() string {
 		titleStyle.Render("ccs — Claude Code Sessions"),
 		"",
 		"  1-9         Resume session by number",
-		"  enter       Resume/switch (tmux) or inline launch",
-		"  o           Force inline launch (TUI suspends)",
+		"  enter       Switch to or resume session (tmux)",
+		"  f           Follow active session (split pane)",
+		"  esc         Exit follow mode / clear filter",
 		"  n           Jump to projects section",
 		"  /           Toggle filter bar",
-		"  esc         Clear filter / exit filter",
 		"  tab         Switch: sessions ↔ projects",
 		"  j/k ↑/↓     Navigate (↑↓←→ in projects)",
 		"  gg/G        Jump to top/bottom",
@@ -1347,6 +1562,53 @@ func (m *Model) handleRefresh() tea.Cmd {
 	m.projects = project.DiscoverProjects(sessions, m.config)
 	m.applyFilter()
 	return nil
+}
+
+// paneCaptureCmd creates a tea.Cmd that captures pane content for a session.
+func paneCaptureCmd(sessionID, windowID string, lines int) tea.Cmd {
+	return func() tea.Msg {
+		snap, err := capture.CapturePane(sessionID, windowID, lines)
+		return PaneCaptureMsg{Snapshot: snap, Err: err}
+	}
+}
+
+// paneCaptureTickCmd fires a PaneCaptureTickMsg after 1 second.
+func paneCaptureTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return PaneCaptureTickMsg{}
+	})
+}
+
+// captureCmdForSession returns a paneCaptureCmd for the given session ID,
+// looking up the tmux window ID from the tracker. Returns nil if not found.
+func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
+	tmuxWindows := m.tracker.TmuxWindowIDs()
+	wid, ok := tmuxWindows[sessionID]
+	if !ok {
+		return nil
+	}
+	return paneCaptureCmd(sessionID, wid, 30)
+}
+
+// selectedTmuxSession returns the currently selected session if it's a SourceTmux session.
+func (m *Model) selectedTmuxSession() (types.Session, bool) {
+	if m.focus != FocusSessions || len(m.filtered) == 0 {
+		return types.Session{}, false
+	}
+	sess := m.filtered[m.sessionIdx]
+	if sess.ActiveSource != types.SourceTmux {
+		return types.Session{}, false
+	}
+	return sess, true
+}
+
+// startPaneCapture begins polling pane capture, returning the initial commands.
+func (m *Model) startPaneCapture(sessionID string) tea.Cmd {
+	cmd := m.captureCmdForSession(sessionID)
+	if cmd == nil {
+		return nil
+	}
+	return tea.Batch(cmd, paneCaptureTickCmd())
 }
 
 func formatDuration(t time.Time) string {

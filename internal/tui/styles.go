@@ -116,6 +116,13 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("99")).
 			Padding(1, 2)
+
+	// Follow mode pane
+	followPaneStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("99")).
+			Padding(0, 1).
+			MarginTop(1)
 )
 
 func contextStyle(pct int) lipgloss.Style {
