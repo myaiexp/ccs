@@ -1139,7 +1139,12 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
-	// Header line: project name + session name (if any) + title
+	// Header line: project name + session name (if any) + title ... right-aligned ctx% + time
+	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
+	timePart := dimStyle.Render(formatDuration(s.LastActive))
+	rightSide := ctxPart + " " + timePart
+	rightWidth := lipgloss.Width(rightSide)
+
 	projName := s.ProjectName
 	projPart := detailValueStyle.Render(projName) + "  "
 	headerLeft := projPart
@@ -1150,7 +1155,7 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 	headerLeftWidth := lipgloss.Width(headerLeft)
 
-	maxTitleWidth := contentWidth - headerLeftWidth
+	maxTitleWidth := contentWidth - headerLeftWidth - rightWidth - 2
 	if maxTitleWidth < 10 {
 		maxTitleWidth = 10
 	}
@@ -1161,17 +1166,19 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 		title += "…"
 	}
-	headerLine := headerLeft + detailValueStyle.Render(title)
+	leftSide := headerLeft + detailValueStyle.Render(title)
+	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	headerLine := leftSide + strings.Repeat(" ", gap) + rightSide
 
-	// Info line: dir/session-name + messages + size + ctx% + time
+	// Info line: dir/session-id + messages + size
 	sizeStr := formatSize(s.FileSize)
-	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-	timePart := dimStyle.Render(formatDuration(s.LastActive))
 	dirWithSession := s.ProjectDir + "/" + s.ID
 	infoLine := dimStyle.Render(dirWithSession) + "  " +
 		detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " +
-		detailValueStyle.Render(sizeStr) + "  " +
-		ctxPart + " " + timePart
+		detailValueStyle.Render(sizeStr)
 
 	lines := []string{
 		headerLine,
