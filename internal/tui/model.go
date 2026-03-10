@@ -1218,9 +1218,16 @@ func (m Model) renderDetail(s types.Session) string {
 	// Info line: dir/session-id + messages + size
 	sizeStr := formatSize(s.FileSize)
 	dirWithSession := s.ProjectDir + "/" + s.ID
-	infoLine := dimStyle.Render(dirWithSession) + "  " +
-		detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " +
-		detailValueStyle.Render(sizeStr)
+	msgsPart := "  " + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " + detailValueStyle.Render(sizeStr)
+	msgsWidth := lipgloss.Width(msgsPart)
+	maxDirWidth := contentWidth - msgsWidth
+	if maxDirWidth < 10 {
+		maxDirWidth = 10
+	}
+	if lipgloss.Width(dirWithSession) > maxDirWidth {
+		dirWithSession = dirWithSession[:maxDirWidth-1] + "…"
+	}
+	infoLine := dimStyle.Render(dirWithSession) + msgsPart
 
 	lines := []string{
 		headerLine,
@@ -1242,6 +1249,11 @@ func (m Model) renderDetail(s types.Session) string {
 		maxLines := m.activityLines()
 		if len(paneLines) > maxLines {
 			paneLines = paneLines[len(paneLines)-maxLines:]
+		}
+		for i, pl := range paneLines {
+			if len(pl) > contentWidth {
+				paneLines[i] = pl[:contentWidth-1] + "…"
+			}
 		}
 		// Dim the content for inactive sessions
 		if s.ActiveSource != types.SourceTmux {
@@ -1269,7 +1281,11 @@ func (m Model) renderDetail(s types.Session) string {
 				aStyle = activeActivityStyle
 			}
 			for i := 0; i < maxEntries; i++ {
-				lines = append(lines, aStyle.Render(activity.FormatEntry(entries[i])))
+				text := activity.FormatEntry(entries[i])
+				if len(text) > contentWidth {
+					text = text[:contentWidth-1] + "…"
+				}
+				lines = append(lines, aStyle.Render(text))
 			}
 		}
 	}
