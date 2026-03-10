@@ -694,7 +694,8 @@ func (m *Model) scrollWindow() (int, int) {
 	}
 	fixedOverhead := 8 + projGridRows
 	if showDetail {
-		fixedOverhead += m.detailPaneLines()
+		// -1 because the detail pane replaces one of the maxRows session slots
+		fixedOverhead += m.detailPaneLines() - 1
 	}
 	availHeight := m.height - 2
 	maxRows := availHeight - fixedOverhead
