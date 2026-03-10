@@ -827,15 +827,26 @@ func (m *Model) detailPaneLines() int {
 	// base: header(1) + info(1) + blank(1) + status(1) + border(2) = 6
 	base := 6
 
-	entries := m.activities[s.ID]
 	hasPaneCapture := false
 	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
 		hasPaneCapture = true
 	}
 
-	if hasPaneCapture || len(entries) > 0 {
+	// Pane capture section
+	if hasPaneCapture {
+		base += 1 + m.activityLines() // blank + capture lines
+	}
+
+	// Activity entries section (cached or from TailFile fallback)
+	entries := m.activities[s.ID]
+	hasEntries := len(entries) > 0
+	if !hasEntries && s.FilePath != "" {
+		// TailFile will be called in renderDetail — estimate non-zero
+		hasEntries = true
+	}
+	if hasEntries {
 		actCount := m.activityLines()
-		if !hasPaneCapture && actCount > len(entries) {
+		if len(entries) > 0 && actCount > len(entries) {
 			actCount = len(entries)
 		}
 		base += 1 + actCount // blank + activity lines
