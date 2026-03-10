@@ -815,44 +815,17 @@ func (m *Model) activityLines() int {
 	return 5
 }
 
-// detailPaneLines calculates the number of lines the detail pane consumes.
-// Layout: header(1) + info(1) + blank(1) + status(1) + border(2) = 6 base
-// Plus activity/terminal lines if present.
+// detailPaneLines returns a fixed height for the detail pane so that the
+// session list doesn't jump around when switching between sessions with
+// different amounts of content. Always reserves space for the content section
+// (pane capture or activity entries).
+// Layout: header(1) + info(1) + blank(1) + status(1) + blank(1) + content(N) + border(2)
 func (m *Model) detailPaneLines() int {
 	if m.focus != FocusSessions || len(m.filtered) == 0 {
 		return 0
 	}
-	s := m.filtered[m.sessionIdx]
-
-	// base: header(1) + info(1) + blank(1) + status(1) + border(2) = 6
-	base := 6
-
-	hasPaneCapture := false
-	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-		hasPaneCapture = true
-	}
-
-	// Pane capture section
-	if hasPaneCapture {
-		base += 1 + m.activityLines() // blank + capture lines
-	}
-
-	// Activity entries section (cached or from TailFile fallback)
-	entries := m.activities[s.ID]
-	hasEntries := len(entries) > 0
-	if !hasEntries && s.FilePath != "" {
-		// TailFile will be called in renderDetail — estimate non-zero
-		hasEntries = true
-	}
-	if hasEntries {
-		actCount := m.activityLines()
-		if len(entries) > 0 && actCount > len(entries) {
-			actCount = len(entries)
-		}
-		base += 1 + actCount // blank + activity lines
-	}
-
-	return base
+	// 7 = header(1) + info(1) + blank(1) + status(1) + blank(1) + border(2)
+	return 7 + m.activityLines()
 }
 
 // View renders the full TUI.
