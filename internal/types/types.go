@@ -44,6 +44,7 @@ type Config struct {
 	RelativeNumbers bool     `toml:"relative_numbers"`
 	TmuxSessionName string   `toml:"tmux_session_name"`
 	ActivityLines   int      `toml:"activity_lines"`
+	ProjectNameMax  int      `toml:"project_name_max"`
 }
 
 // SortField determines which field to sort by.

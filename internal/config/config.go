@@ -45,6 +45,9 @@ func applyDefaults(cfg *types.Config) {
 	if cfg.ActivityLines <= 0 {
 		cfg.ActivityLines = 5
 	}
+	if cfg.ProjectNameMax <= 0 {
+		cfg.ProjectNameMax = 16
+	}
 }
 
 func Save(cfg *types.Config) error {

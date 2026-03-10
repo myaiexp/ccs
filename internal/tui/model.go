@@ -240,7 +240,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Preferences overlay
 	if m.showPrefs {
-		const prefsCount = 2
+		const prefsCount = 3
 		switch key {
 		case "j", "down":
 			if m.prefsIdx < prefsCount-1 {
@@ -265,6 +265,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.config.ActivityLines = 15
 				default:
 					m.config.ActivityLines = 3
+				}
+				config.Save(m.config)
+			case 2: // name length cycle: 12 → 16 → 20 → 24 → 30 → 12
+				switch m.config.ProjectNameMax {
+				case 12:
+					m.config.ProjectNameMax = 16
+				case 16:
+					m.config.ProjectNameMax = 20
+				case 20:
+					m.config.ProjectNameMax = 24
+				case 24:
+					m.config.ProjectNameMax = 30
+				default:
+					m.config.ProjectNameMax = 12
 				}
 				config.Save(m.config)
 			}
@@ -720,8 +734,8 @@ func filterVisibleProjects(projects []types.Project, showHidden bool) []types.Pr
 	return visible
 }
 
-// projectGrid computes the actual row layout of the project grid,
-// matching how renderProjects wraps items by width.
+// projectGrid computes the columnar row layout of the project grid,
+// matching how renderProjects arranges items left-to-right, top-to-bottom.
 // Returns rows where each row is a slice of item indices.
 func (m *Model) projectGrid() [][]int {
 	if len(m.filteredProj) == 0 {
@@ -732,33 +746,54 @@ func (m *Model) projectGrid() [][]int {
 	if maxWidth < 40 {
 		maxWidth = 40
 	}
+	nameMax := m.config.ProjectNameMax
+	gap := 2
+	n := len(m.filteredProj)
 
-	sepWidth := 3 // " · "
-	var rows [][]int
-	var currentRow []int
-	lineWidth := 0
-
+	// Truncate names for width calculation
+	names := make([]string, n)
 	for i, p := range m.filteredProj {
-		nameWidth := lipgloss.Width(p.Name)
-		addition := nameWidth
-		if len(currentRow) > 0 {
-			addition += sepWidth
-		}
-
-		if lineWidth+addition > maxWidth && len(currentRow) > 0 {
-			rows = append(rows, currentRow)
-			currentRow = []int{i}
-			lineWidth = nameWidth
-		} else {
-			currentRow = append(currentRow, i)
-			lineWidth += addition
-		}
-	}
-	if len(currentRow) > 0 {
-		rows = append(rows, currentRow)
+		names[i] = truncateName(p.Name, nameMax)
 	}
 
-	return rows
+	// Find optimal column count
+	bestCols := 1
+	for cols := n; cols >= 1; cols-- {
+		rows := (n + cols - 1) / cols
+		totalWidth := 0
+		for c := 0; c < cols; c++ {
+			colMax := 0
+			for r := 0; r < rows; r++ {
+				idx := r*cols + c
+				if idx < n && len(names[idx]) > colMax {
+					colMax = len(names[idx])
+				}
+			}
+			totalWidth += colMax
+			if c < cols-1 {
+				totalWidth += gap
+			}
+		}
+		if totalWidth <= maxWidth {
+			bestCols = cols
+			break
+		}
+	}
+
+	rows := (n + bestCols - 1) / bestCols
+	var grid [][]int
+	for r := 0; r < rows; r++ {
+		var row []int
+		for c := 0; c < bestCols; c++ {
+			idx := r*bestCols + c
+			if idx < n {
+				row = append(row, idx)
+			}
+		}
+		grid = append(grid, row)
+	}
+
+	return grid
 }
 
 // gridPosition returns (row, col) for a given item index in the grid.
@@ -1288,51 +1323,97 @@ func formatSize(bytes int64) string {
 	}
 }
 
+// truncateName truncates a project name to maxLen, appending "…" if truncated.
+func truncateName(name string, maxLen int) string {
+	if len(name) <= maxLen {
+		return name
+	}
+	if maxLen <= 1 {
+		return "…"
+	}
+	return name[:maxLen-1] + "…"
+}
+
 func (m Model) renderProjects() string {
 	if len(m.filteredProj) == 0 {
 		return dimStyle.Render("  no projects")
 	}
 
-	var parts []string
-	for i, p := range m.filteredProj {
-		name := p.Name
-		if m.focus == FocusProjects && i == m.projectIdx {
-			parts = append(parts, selectedProjectStyle.Render(name))
-		} else if p.Hidden {
-			parts = append(parts, hiddenProjectStyle.Render(name))
-		} else {
-			parts = append(parts, normalProjectStyle.Render(name))
-		}
-	}
-
-	// Join with separators and wrap
-	sep := dimStyle.Render(" · ")
 	maxWidth := m.width - 4
 	if maxWidth < 40 {
 		maxWidth = 40
 	}
+	nameMax := m.config.ProjectNameMax
 
-	var lines []string
-	var currentLine string
-	for i, part := range parts {
-		addition := part
-		if i > 0 {
-			addition = sep + part
+	// Truncate all names
+	names := make([]string, len(m.filteredProj))
+	for i, p := range m.filteredProj {
+		names[i] = truncateName(p.Name, nameMax)
+	}
+
+	// Determine optimal column count (left-to-right, top-to-bottom)
+	gap := 2
+	n := len(names)
+	bestCols := 1
+	for cols := n; cols >= 1; cols-- {
+		rows := (n + cols - 1) / cols
+		totalWidth := 0
+		for c := 0; c < cols; c++ {
+			colMax := 0
+			for r := 0; r < rows; r++ {
+				idx := r*cols + c
+				if idx < n && len(names[idx]) > colMax {
+					colMax = len(names[idx])
+				}
+			}
+			totalWidth += colMax
+			if c < cols-1 {
+				totalWidth += gap
+			}
 		}
-		testLen := lipgloss.Width(currentLine + addition)
-		if testLen > maxWidth && currentLine != "" {
-			lines = append(lines, "  "+currentLine)
-			currentLine = part
-		} else {
-			if currentLine == "" {
-				currentLine = part
-			} else {
-				currentLine += sep + part
+		if totalWidth <= maxWidth {
+			bestCols = cols
+			break
+		}
+	}
+
+	// Compute column widths
+	rows := (n + bestCols - 1) / bestCols
+	colWidths := make([]int, bestCols)
+	for c := 0; c < bestCols; c++ {
+		for r := 0; r < rows; r++ {
+			idx := r*bestCols + c
+			if idx < n && len(names[idx]) > colWidths[c] {
+				colWidths[c] = len(names[idx])
 			}
 		}
 	}
-	if currentLine != "" {
-		lines = append(lines, "  "+currentLine)
+
+	// Render grid
+	var lines []string
+	for r := 0; r < rows; r++ {
+		var line strings.Builder
+		line.WriteString("  ")
+		for c := 0; c < bestCols; c++ {
+			idx := r*bestCols + c
+			if idx >= n {
+				break
+			}
+			name := names[idx]
+			padded := name + strings.Repeat(" ", colWidths[c]-len(name))
+			if c < bestCols-1 {
+				padded += strings.Repeat(" ", gap)
+			}
+
+			if m.focus == FocusProjects && idx == m.projectIdx {
+				line.WriteString(selectedProjectStyle.Render(padded))
+			} else if m.filteredProj[idx].Hidden {
+				line.WriteString(hiddenProjectStyle.Render(padded))
+			} else {
+				line.WriteString(normalProjectStyle.Render(padded))
+			}
+		}
+		lines = append(lines, line.String())
 	}
 
 	return strings.Join(lines, "\n")
@@ -1399,6 +1480,7 @@ func (m Model) renderPrefs() string {
 	items := []prefItem{
 		{"Relative numbers (nvim-style)", "", m.config.RelativeNumbers},
 		{"Activity lines", fmt.Sprintf("%d", m.config.ActivityLines), false},
+		{"Project name length", fmt.Sprintf("%d", m.config.ProjectNameMax), false},
 	}
 
 	lines := []string{
