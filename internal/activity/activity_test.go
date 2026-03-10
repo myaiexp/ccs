@@ -48,12 +48,12 @@ func TestExtractFromLine_Text(t *testing.T) {
 	if e.Tool != "" {
 		t.Errorf("expected empty tool, got %q", e.Tool)
 	}
-	// Should be truncated to ~60 chars
-	if len(e.Summary) > 60 {
-		t.Errorf("expected summary <= 60 chars, got %d: %q", len(e.Summary), e.Summary)
+	// Should preserve the full first line (up to 200 chars); display layer truncates to fit
+	if len(e.Summary) > 200 {
+		t.Errorf("expected summary <= 200 chars, got %d: %q", len(e.Summary), e.Summary)
 	}
-	if !strings.HasSuffix(e.Summary, "...") {
-		t.Errorf("expected truncated summary to end with '...', got %q", e.Summary)
+	if e.Summary != longText {
+		t.Errorf("expected full text preserved, got %q", e.Summary)
 	}
 	if !e.Timestamp.IsZero() {
 		t.Errorf("expected zero timestamp, got %v", e.Timestamp)

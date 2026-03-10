@@ -81,7 +81,7 @@ func ExtractFromLine(line []byte) []Entry {
 			if block.Text == "" {
 				continue
 			}
-			summary := firstLine(block.Text, 60)
+			summary := firstLine(block.Text, 200)
 			e := Entry{
 				Type:      "text",
 				Summary:   summary,
@@ -199,14 +199,12 @@ func buildToolSummary(name string, rawInput json.RawMessage) string {
 		return name
 	case "Bash":
 		if inp.Command != "" {
-			cmd := truncate(inp.Command, 40)
-			return "Bash: " + cmd
+			return "Bash: " + inp.Command
 		}
 		return "Bash"
 	case "Grep", "Glob":
 		if inp.Pattern != "" {
-			pat := truncate(inp.Pattern, 40)
-			return name + ": " + pat
+			return name + ": " + inp.Pattern
 		}
 		return name
 	default:

@@ -1283,6 +1283,15 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
+	// Clamp all lines to contentWidth to prevent lipgloss wrapping.
+	// Uses MaxWidth which handles ANSI escape codes correctly.
+	clampStyle := lipgloss.NewStyle().MaxWidth(contentWidth)
+	for i, l := range lines {
+		if lipgloss.Width(l) > contentWidth {
+			lines[i] = clampStyle.Render(l)
+		}
+	}
+
 	// Pad to fill the reserved height so the layout doesn't shift.
 	// detailPaneLines() includes border(2), so inner target = detailPaneLines - 2.
 	targetInner := m.detailPaneLines() - 2
