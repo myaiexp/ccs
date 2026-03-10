@@ -69,6 +69,7 @@ func CapturePaneContent(windowID string, lines int) (string, error) {
 	content = strings.TrimRight(content, "\n")
 	content = stripStatusBar(content)
 	content = stripTrailingNoise(content)
+	content = collapseTaskList(content)
 	return content, nil
 }
 
@@ -150,6 +151,86 @@ func isBoxDrawingLine(line string) bool {
 	}
 	// A separator line is mostly box drawing chars (>80% of non-space chars)
 	return total > 10 && boxCount*100/total > 80
+}
+
+// collapseTaskList detects Claude Code task lists in pane output and collapses them
+// to show only the currently active task. Completed (✓/✔) and pending (□/▫) tasks
+// are removed; in-progress (■/▪) tasks are kept. If tasks were removed, a summary
+// line like "3/5 done" is prepended.
+func collapseTaskList(content string) string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	var activeTasks []string
+	totalTasks := 0
+	completedTasks := 0
+	inTaskBlock := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		marker, isTodo := todoLineMarker(trimmed)
+		if isTodo {
+			inTaskBlock = true
+			totalTasks++
+			switch marker {
+			case "done":
+				completedTasks++
+				// Skip completed task lines
+			case "active":
+				activeTasks = append(activeTasks, line)
+			case "pending":
+				// Skip pending task lines
+			}
+		} else {
+			// If we just left a task block, emit the summary + active tasks
+			if inTaskBlock {
+				if totalTasks > 0 && len(activeTasks) > 0 {
+					if completedTasks > 0 {
+						result = append(result, fmt.Sprintf("  %d/%d done", completedTasks, totalTasks))
+					}
+					result = append(result, activeTasks...)
+				}
+				activeTasks = nil
+				totalTasks = 0
+				completedTasks = 0
+				inTaskBlock = false
+			}
+			result = append(result, line)
+		}
+	}
+	// Handle task block at end of content
+	if inTaskBlock && totalTasks > 0 && len(activeTasks) > 0 {
+		if completedTasks > 0 {
+			result = append(result, fmt.Sprintf("  %d/%d done", completedTasks, totalTasks))
+		}
+		result = append(result, activeTasks...)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// todoLineMarker checks if a line looks like a Claude Code task/todo line.
+// Returns the marker type ("done", "active", "pending") and true, or ("", false).
+func todoLineMarker(line string) (string, bool) {
+	// Find the first non-space rune
+	for _, r := range line {
+		if r == ' ' || r == '\t' {
+			continue
+		}
+		switch {
+		// Completed: ✓ (U+2713), ✔ (U+2714)
+		case r == '✓' || r == '✔' || r == '\u2705':
+			return "done", true
+		// In-progress: ■ (U+25A0), ▪ (U+25AA), ▸ (U+25B8)
+		case r == '■' || r == '▪' || r == '▸':
+			return "active", true
+		// Pending: □ (U+25A1), ▫ (U+25AB), ○ (U+25CB)
+		case r == '□' || r == '▫' || r == '○':
+			return "pending", true
+		default:
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // PanePIDs returns a map of PID → window ID for all panes in the current tmux server.

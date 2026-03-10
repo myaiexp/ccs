@@ -35,10 +35,15 @@ var (
 			Foreground(lipgloss.Color("220")).
 			Render("●")
 
-	// Activity summary style (dim italic)
+	// Activity summary style (dim italic for inactive sessions)
 	activityStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("245")).
 			Italic(true)
+
+	// Activity style for active sessions (brighter, still italic)
+	activeActivityStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).
+				Italic(true)
 
 	// Session number
 	numStyle = lipgloss.NewStyle().

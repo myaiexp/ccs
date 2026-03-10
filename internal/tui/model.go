@@ -1289,8 +1289,12 @@ func (m Model) renderDetail(s types.Session) string {
 		if maxEntries > len(entries) {
 			maxEntries = len(entries)
 		}
+		aStyle := activityStyle
+		if s.ActiveSource == types.SourceTmux || s.ActiveSource == types.SourceProc {
+			aStyle = activeActivityStyle
+		}
 		for i := 0; i < maxEntries; i++ {
-			lines = append(lines, activityStyle.Render(activity.FormatEntry(entries[i])))
+			lines = append(lines, aStyle.Render(activity.FormatEntry(entries[i])))
 		}
 	}
 
