@@ -1245,7 +1245,6 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 
 	// Activity / terminal content below status (full width)
-	entries := m.activities[s.ID]
 	hasPaneCapture := false
 	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
 		hasPaneCapture = true
@@ -1266,7 +1265,14 @@ func (m Model) renderDetail(s types.Session) string {
 			}
 		}
 		lines = append(lines, paneLines...)
-	} else if len(entries) > 0 {
+	}
+
+	// Activity entries — use cached if available, otherwise load from file
+	entries := m.activities[s.ID]
+	if len(entries) == 0 && s.FilePath != "" {
+		entries = activity.TailFile(s.FilePath, m.activityLines())
+	}
+	if len(entries) > 0 {
 		lines = append(lines, "")
 		maxEntries := m.activityLines()
 		if maxEntries > len(entries) {
@@ -1606,7 +1612,6 @@ func (m *Model) handleRefresh() tea.Cmd {
 		for id, path := range oldActive {
 			if _, is := newActive[id]; !is {
 				m.watcher.Unwatch(path)
-				delete(m.activities, id)
 			}
 		}
 	}
