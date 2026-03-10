@@ -1278,23 +1278,25 @@ func (m Model) renderDetail(s types.Session) string {
 		lines = append(lines, paneLines...)
 	}
 
-	// Activity entries — use cached if available, otherwise load from file
-	entries := m.activities[s.ID]
-	if len(entries) == 0 && s.FilePath != "" {
-		entries = activity.TailFile(s.FilePath, m.activityLines())
-	}
-	if len(entries) > 0 {
-		lines = append(lines, "")
-		maxEntries := m.activityLines()
-		if maxEntries > len(entries) {
-			maxEntries = len(entries)
+	// Activity entries — only show when no pane capture available (avoids redundancy)
+	if !hasPaneCapture {
+		entries := m.activities[s.ID]
+		if len(entries) == 0 && s.FilePath != "" {
+			entries = activity.TailFile(s.FilePath, m.activityLines())
 		}
-		aStyle := activityStyle
-		if s.ActiveSource == types.SourceTmux || s.ActiveSource == types.SourceProc {
-			aStyle = activeActivityStyle
-		}
-		for i := 0; i < maxEntries; i++ {
-			lines = append(lines, aStyle.Render(activity.FormatEntry(entries[i])))
+		if len(entries) > 0 {
+			lines = append(lines, "")
+			maxEntries := m.activityLines()
+			if maxEntries > len(entries) {
+				maxEntries = len(entries)
+			}
+			aStyle := activityStyle
+			if s.ActiveSource == types.SourceTmux || s.ActiveSource == types.SourceProc {
+				aStyle = activeActivityStyle
+			}
+			for i := 0; i < maxEntries; i++ {
+				lines = append(lines, aStyle.Render(activity.FormatEntry(entries[i])))
+			}
 		}
 	}
 
