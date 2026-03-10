@@ -1273,6 +1273,16 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
+	// Pad to fill the reserved height so the layout doesn't shift.
+	// detailPaneLines() includes border(2), so inner target = detailPaneLines - 2.
+	targetInner := m.detailPaneLines() - 2
+	for len(lines) < targetInner {
+		lines = append(lines, "")
+	}
+	if len(lines) > targetInner {
+		lines = lines[:targetInner]
+	}
+
 	content := strings.Join(lines, "\n")
 	styled := detailBorderStyle.Width(detailWidth).Render(content)
 	return styled
