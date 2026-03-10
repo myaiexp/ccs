@@ -199,12 +199,12 @@ func buildToolSummary(name string, rawInput json.RawMessage) string {
 		return name
 	case "Bash":
 		if inp.Command != "" {
-			return "Bash: " + inp.Command
+			return "Bash: " + firstLine(inp.Command, 200)
 		}
 		return "Bash"
 	case "Grep", "Glob":
 		if inp.Pattern != "" {
-			return name + ": " + inp.Pattern
+			return name + ": " + firstLine(inp.Pattern, 200)
 		}
 		return name
 	default:

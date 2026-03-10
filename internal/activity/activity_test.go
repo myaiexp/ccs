@@ -60,6 +60,17 @@ func TestExtractFromLine_Text(t *testing.T) {
 	}
 }
 
+func TestBuildToolSummary_MultilineCommand(t *testing.T) {
+	// Bash commands with heredocs contain newlines — only first line should be kept
+	summary := buildToolSummary("Bash", []byte(`{"command":"git commit -m \"$(cat <<'EOF'\nFix something\nEOF\n)\""}`))
+	if strings.Contains(summary, "\n") {
+		t.Errorf("summary should not contain newlines, got %q", summary)
+	}
+	if !strings.HasPrefix(summary, "Bash: ") {
+		t.Errorf("expected Bash: prefix, got %q", summary)
+	}
+}
+
 func TestExtractFromLine_IgnoresUserMessages(t *testing.T) {
 	line := []byte(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`)
 

@@ -1304,6 +1304,7 @@ func (m Model) renderDetail(s types.Session) string {
 
 	content := strings.Join(lines, "\n")
 	styled := detailBorderStyle.Width(detailWidth).Render(content)
+
 	return styled
 }
 

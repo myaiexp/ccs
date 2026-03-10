@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"ccs/internal/activity"
+	"ccs/internal/capture"
 	"ccs/internal/types"
 )
 
@@ -139,6 +142,76 @@ func TestSortFiltered(t *testing.T) {
 
 	if m.filtered[0].Title != "C session" {
 		t.Errorf("first = %q, want C session", m.filtered[0].Title)
+	}
+}
+
+func TestRenderDetailHeight(t *testing.T) {
+	// Verify that renderDetail always produces exactly detailPaneLines() lines,
+	// regardless of content. Long pane capture lines must not wrap.
+	cfg := &types.Config{}
+	m := Model{
+		config:      cfg,
+		focus:       FocusSessions,
+		width:       100,
+		height:      40,
+		paneContent: make(map[string]capture.PaneSnapshot),
+		activities:  make(map[string][]activity.Entry),
+	}
+
+	longLine := strings.Repeat("x", 200) // much wider than any detail pane
+	tests := []struct {
+		name    string
+		session types.Session
+		pane    string // pane capture content (empty = no capture)
+	}{
+		{
+			name:    "no content",
+			session: types.Session{ID: "s1", ProjectName: "test", Title: "title"},
+		},
+		{
+			name:    "short pane capture",
+			session: types.Session{ID: "s2", ProjectName: "test", Title: "title", ActiveSource: types.SourceTmux},
+			pane:    "line1\nline2\nline3",
+		},
+		{
+			name:    "long pane lines that should be truncated",
+			session: types.Session{ID: "s3", ProjectName: "test", Title: "title", ActiveSource: types.SourceTmux},
+			pane:    longLine + "\n" + longLine + "\n" + longLine + "\n" + longLine + "\n" + longLine,
+		},
+		{
+			name:    "inactive with long pane capture",
+			session: types.Session{ID: "s4", ProjectName: "test", Title: "title"},
+			pane:    longLine + "\n" + longLine + "\n" + longLine,
+		},
+		{
+			name:    "long project dir",
+			session: types.Session{ID: "s5", ProjectName: "very-long-project-name", ProjectDir: "/home/mse/Projects/very-long-project-name", Title: strings.Repeat("w", 100)},
+		},
+		{
+			name:    "long session name + title",
+			session: types.Session{ID: "s6", ProjectName: "proj", SessionName: "my-long-session-name", Title: strings.Repeat("t", 100)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m.filtered = []types.Session{tt.session}
+			m.sessionIdx = 0
+			if tt.pane != "" {
+				m.paneContent[tt.session.ID] = capture.PaneSnapshot{Content: tt.pane}
+			} else {
+				delete(m.paneContent, tt.session.ID)
+			}
+
+			rendered := m.renderDetail(tt.session)
+			actualLines := strings.Count(rendered, "\n") + 1
+			expected := m.detailPaneLines()
+
+			if actualLines != expected {
+				t.Errorf("renderDetail produced %d lines, want %d (detailPaneLines)\nrendered:\n%s",
+					actualLines, expected, rendered)
+			}
+		})
 	}
 }
 
