@@ -1224,9 +1224,7 @@ func (m Model) renderDetail(s types.Session) string {
 	if maxDirWidth < 10 {
 		maxDirWidth = 10
 	}
-	if lipgloss.Width(dirWithSession) > maxDirWidth {
-		dirWithSession = dirWithSession[:maxDirWidth-1] + "…"
-	}
+	dirWithSession = truncateToWidth(dirWithSession, maxDirWidth)
 	infoLine := dimStyle.Render(dirWithSession) + msgsPart
 
 	lines := []string{
@@ -1251,9 +1249,7 @@ func (m Model) renderDetail(s types.Session) string {
 			paneLines = paneLines[len(paneLines)-maxLines:]
 		}
 		for i, pl := range paneLines {
-			if len(pl) > contentWidth {
-				paneLines[i] = pl[:contentWidth-1] + "…"
-			}
+			paneLines[i] = truncateToWidth(pl, contentWidth)
 		}
 		// Dim the content for inactive sessions
 		if s.ActiveSource != types.SourceTmux {
@@ -1281,10 +1277,7 @@ func (m Model) renderDetail(s types.Session) string {
 				aStyle = activeActivityStyle
 			}
 			for i := 0; i < maxEntries; i++ {
-				text := activity.FormatEntry(entries[i])
-				if len(text) > contentWidth {
-					text = text[:contentWidth-1] + "…"
-				}
+				text := truncateToWidth(activity.FormatEntry(entries[i]), contentWidth)
 				lines = append(lines, aStyle.Render(text))
 			}
 		}
@@ -1355,6 +1348,23 @@ func truncateName(name string, maxLen int) string {
 		return "…"
 	}
 	return name[:maxLen-1] + "…"
+}
+
+// truncateToWidth truncates a string to fit within maxWidth visual columns.
+// Uses lipgloss.Width for accurate measurement (handles multi-byte UTF-8).
+func truncateToWidth(s string, maxWidth int) string {
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 {
+		candidate := string(runes[:len(runes)-1])
+		if lipgloss.Width(candidate)+1 <= maxWidth { // +1 for "…"
+			return candidate + "…"
+		}
+		runes = runes[:len(runes)-1]
+	}
+	return "…"
 }
 
 func (m Model) renderProjects() string {
