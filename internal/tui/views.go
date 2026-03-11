@@ -274,21 +274,18 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		}
 	}
 
-	// Activity text for active sessions
-	activityText := ""
+	// Activity text for active sessions (raw, will be truncated below)
+	rawActivity := ""
 	if entries, ok := m.activities[s.ID]; ok && len(entries) > 0 {
-		activityText = activityStyle.Render(activity.FormatEntry(entries[0]))
+		rawActivity = activity.FormatEntry(entries[0])
 	}
 
-	// Right side: activity + ctx% + time
-	rightSide := contextStyle(s.ContextPct).Render(ctxStr) + " " + dimStyle.Render(timeStr)
-	if activityText != "" {
-		rightSide = activityText + "  " + rightSide
-	}
+	// Right side (fixed part): ctx% + time + optional hidden label
+	fixedRight := contextStyle(s.ContextPct).Render(ctxStr) + " " + dimStyle.Render(timeStr)
 	if hiddenLabel != "" {
-		rightSide = hiddenLabel + rightSide
+		fixedRight = hiddenLabel + fixedRight
 	}
-	rightWidth := lipgloss.Width(rightSide)
+	fixedRightWidth := lipgloss.Width(fixedRight)
 
 	// Left side: dot(1) + space(1) + num(4) + space(1) + proj(natural) + gap(2) [+ sessName + gap(2)]
 	projWidth := lipgloss.Width(projName)
@@ -301,6 +298,26 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 	leftFixed := 7 + projWidth + 2 + sessNameWidth // dot+space+num+space + proj + gap + sessName + gap
 	// Content area inside outer border: width - border(2) - padding(2) = width - 4
 	contentWidth := m.width - 4
+
+	// Budget: contentWidth = leftFixed + title + gap(2) + [activity + gap(2)] + fixedRight
+	// Allocate at least 10 chars for title, then activity gets the rest
+	activityText := ""
+	if rawActivity != "" {
+		maxActivity := contentWidth - leftFixed - fixedRightWidth - 10 - 6 // 10=minTitle, 6=gaps
+		if maxActivity >= 15 {
+			if lipgloss.Width(rawActivity) > maxActivity {
+				rawActivity = truncateToWidth(rawActivity, maxActivity)
+			}
+			activityText = activityStyle.Render(rawActivity)
+		}
+	}
+
+	rightSide := fixedRight
+	if activityText != "" {
+		rightSide = activityText + "  " + rightSide
+	}
+	rightWidth := lipgloss.Width(rightSide)
+
 	// Title gets whatever space remains, minus gap(2) before right side
 	maxTitle := contentWidth - leftFixed - rightWidth - 2
 	if maxTitle < 10 {
