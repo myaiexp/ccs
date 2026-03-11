@@ -12,7 +12,6 @@ import (
 	"ccs/internal/session"
 	"ccs/internal/tmux"
 	"ccs/internal/tui"
-	"ccs/internal/types"
 	"ccs/internal/watcher"
 )
 
@@ -51,19 +50,7 @@ func main() {
 	tracker.Refresh()
 	tracker.MatchNewSession(sessions)
 
-	// Mark sessions as open based on tracker, with ActiveSource
-	openIDs := tracker.OpenSessionIDs()
-	tmuxWindows := tracker.TmuxWindowIDs()
-	for i := range sessions {
-		if openIDs[sessions[i].ID] {
-			sessions[i].IsActive = true
-			if _, hasTmux := tmuxWindows[sessions[i].ID]; hasTmux {
-				sessions[i].ActiveSource = types.SourceTmux
-			} else {
-				sessions[i].ActiveSource = types.SourceProc
-			}
-		}
-	}
+	tracker.MarkActive(sessions)
 
 	// Create file watcher for activity monitoring
 	w, err := watcher.New(cfg.ActivityLines)

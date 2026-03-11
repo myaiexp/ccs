@@ -16,11 +16,12 @@ type TmuxLaunchDoneMsg struct{ Err error }
 // TmuxSwitchDoneMsg is sent when a tmux window switch completes.
 type TmuxSwitchDoneMsg struct{ Err error }
 
-// tmuxWindowName builds a window name like "proj: title", truncated to 30 chars.
+// tmuxWindowName builds a window name like "proj: title", truncated to 30 runes.
 func tmuxWindowName(proj, title string) string {
 	name := fmt.Sprintf("%s: %s", proj, title)
-	if len(name) > 30 {
-		name = name[:30]
+	runes := []rune(name)
+	if len(runes) > 30 {
+		name = string(runes[:30])
 	}
 	return name
 }
@@ -48,8 +49,8 @@ func TmuxLaunchResume(sess types.Session, flags []string, tracker *session.Track
 func TmuxLaunchNew(proj types.Project, flags []string, tracker *session.Tracker) tea.Cmd {
 	return func() tea.Msg {
 		name := proj.Name
-		if len(name) > 30 {
-			name = name[:30]
+		if runes := []rune(name); len(runes) > 30 {
+			name = string(runes[:30])
 		}
 		cmd := make([]string, 0, len(flags)+1)
 		cmd = append(cmd, "claude")
