@@ -99,7 +99,7 @@ func stripStatusBar(content string) string {
 }
 
 // stripTrailingNoise removes trailing empty lines and spinner/status lines (✻ Thinking...)
-// from the bottom of captured content. Returns whether a spinner was present (activity signal).
+// from the bottom of captured content.
 func stripTrailingNoise(content string) string {
 	lines := strings.Split(content, "\n")
 	// Strip from the bottom: empty lines and spinner lines
@@ -174,11 +174,9 @@ func collapseTaskList(content string) string {
 			switch marker {
 			case "done":
 				completedTasks++
-				// Skip completed task lines
 			case "active":
 				activeTasks = append(activeTasks, line)
 			case "pending":
-				// Skip pending task lines
 			}
 		} else {
 			// If we just left a task block, emit the summary + active tasks
@@ -234,10 +232,10 @@ func todoLineMarker(line string) (string, bool) {
 }
 
 // PanePIDs returns a map of PID → window ID for all panes in the current tmux server.
-func PanePIDs() map[int]string {
+func PanePIDs() (map[int]string, error) {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{window_id} #{pane_pid}").Output()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	result := make(map[int]string)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -251,7 +249,7 @@ func PanePIDs() map[int]string {
 			result[pid] = parts[0]
 		}
 	}
-	return result
+	return result, nil
 }
 
 // WindowExists checks whether a tmux window with the given ID exists.

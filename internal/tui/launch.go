@@ -27,7 +27,7 @@ func tmuxWindowName(proj, title string) string {
 }
 
 // TmuxLaunchResume creates a new tmux window to resume a session.
-// The TUI stays visible (no tea.Exec). Returns RefreshMsg on completion.
+// The TUI stays visible (no tea.Exec). Returns TmuxLaunchDoneMsg on completion.
 func TmuxLaunchResume(sess types.Session, flags []string, tracker *session.Tracker) tea.Cmd {
 	return func() tea.Msg {
 		name := tmuxWindowName(sess.ProjectName, sess.Title)

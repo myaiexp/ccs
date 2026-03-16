@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -74,19 +73,14 @@ type Model struct {
 	activities   map[string][]activity.Entry    // sessionID -> recent entries
 	followID    string                         // session ID being followed (empty = normal)
 	paneContent map[string]capture.PaneSnapshot // sessionID -> latest snapshot
+	projectsDir string                         // ~/.claude/projects path
 }
 
-func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker, w *watcher.Watcher) Model {
+func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker, w *watcher.Watcher, projectsDir string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
-
-	// Filter out hidden sessions
-	hiddenSet := make(map[string]bool, len(cfg.HiddenSessions))
-	for _, id := range cfg.HiddenSessions {
-		hiddenSet[id] = true
-	}
 
 	m := Model{
 		sessions:     sessions,
@@ -101,6 +95,7 @@ func New(sessions []types.Session, projects []types.Project, cfg *types.Config, 
 		watcher:      w,
 		activities:   make(map[string][]activity.Entry),
 		paneContent:  make(map[string]capture.PaneSnapshot),
+		projectsDir:  projectsDir,
 	}
 	m.applyFilter()
 
@@ -139,6 +134,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, refreshCmd()
 
 	case TmuxSwitchDoneMsg:
+		if msg.Err != nil {
+			m.errMsg = fmt.Sprintf("Tmux switch error: %v", msg.Err)
+		}
 		return m, nil
 
 	case ActivityUpdateMsg:
@@ -253,7 +251,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch m.prefsIdx {
 			case 0: // relative numbers
 				m.config.RelativeNumbers = !m.config.RelativeNumbers
-				config.Save(m.config)
+				if err := config.Save(m.config); err != nil {
+					m.errMsg = fmt.Sprintf("Config save error: %v", err)
+				}
 			case 1: // activity lines cycle: 3 → 5 → 10 → 15 → 3
 				switch m.config.ActivityLines {
 				case 3:
@@ -265,7 +265,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				default:
 					m.config.ActivityLines = 3
 				}
-				config.Save(m.config)
+				if err := config.Save(m.config); err != nil {
+					m.errMsg = fmt.Sprintf("Config save error: %v", err)
+				}
 			case 2: // name length cycle: 12 → 16 → 20 → 24 → 30 → 12
 				switch m.config.ProjectNameMax {
 				case 12:
@@ -279,7 +281,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				default:
 					m.config.ProjectNameMax = 12
 				}
-				config.Save(m.config)
+				if err := config.Save(m.config); err != nil {
+					m.errMsg = fmt.Sprintf("Config save error: %v", err)
+				}
 			}
 		case "esc", "p", "q":
 			m.showPrefs = false
@@ -562,7 +566,9 @@ func (m *Model) toggleHideSession() {
 		newHidden = append(newHidden, sess.ID)
 	}
 	m.config.HiddenSessions = newHidden
-	config.Save(m.config)
+	if err := config.Save(m.config); err != nil {
+		m.errMsg = fmt.Sprintf("Config save error: %v", err)
+	}
 	m.applyFilter()
 }
 
@@ -875,13 +881,7 @@ func watchCmd(w *watcher.Watcher) tea.Cmd {
 }
 
 func (m *Model) handleRefresh() tea.Cmd {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	projectsDir := filepath.Join(home, ".claude", "projects")
-
-	sessions, err := session.DiscoverSessions(projectsDir)
+	sessions, err := session.DiscoverSessions(m.projectsDir)
 	if err != nil {
 		return nil
 	}
@@ -955,11 +955,8 @@ func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
 	return paneCaptureCmd(sessionID, wid, 30)
 }
 
-// startPaneCapture begins polling pane capture, returning the initial commands.
+// startPaneCapture triggers an immediate pane capture for the followed session.
+// The periodic tick from Init() handles subsequent captures.
 func (m *Model) startPaneCapture(sessionID string) tea.Cmd {
-	cmd := m.captureCmdForSession(sessionID)
-	if cmd == nil {
-		return nil
-	}
-	return tea.Batch(cmd, paneCaptureTickCmd())
+	return m.captureCmdForSession(sessionID)
 }

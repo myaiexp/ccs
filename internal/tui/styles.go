@@ -49,27 +49,14 @@ var (
 	numStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 
-	// Selected item (full row highlight)
-	selectedStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("255")).
-			Background(lipgloss.Color("236"))
-
 	// Selection cursor arrow
 	cursorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("99")).
 			Bold(true)
 
-	// Normal item text
-	normalStyle = lipgloss.NewStyle()
-
 	// Project name in session list
 	projectStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("75"))
-
-	// Session title
-	titleTextStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
 
 	// Context percentage colors
 	contextGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
@@ -99,10 +86,6 @@ var (
 	hiddenProjectStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("240")).
 				Italic(true)
-
-	// Filter prompt
-	filterPromptStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("99"))
 
 	// Session detail pane
 	detailBorderStyle = lipgloss.NewStyle().

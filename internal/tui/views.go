@@ -324,14 +324,7 @@ func (m Model) renderSession(visNum int, s types.Session) string {
 		maxTitle = 10
 	}
 
-	title := s.Title
-	if lipgloss.Width(title) > maxTitle {
-		// Truncate by runes to handle multi-byte chars
-		for lipgloss.Width(title) > maxTitle-1 && len(title) > 0 {
-			title = title[:len(title)-1]
-		}
-		title += "…"
-	}
+	title := truncateToWidth(s.Title, maxTitle)
 
 	var leftSide string
 	if sessName != "" {
@@ -400,13 +393,7 @@ func (m Model) renderDetail(s types.Session) string {
 	if maxTitleWidth < 10 {
 		maxTitleWidth = 10
 	}
-	title := s.Title
-	if lipgloss.Width(title) > maxTitleWidth {
-		for lipgloss.Width(title) > maxTitleWidth-1 && len(title) > 0 {
-			title = title[:len(title)-1]
-		}
-		title += "…"
-	}
+	title := truncateToWidth(s.Title, maxTitleWidth)
 	leftSide := headerLeft + detailValueStyle.Render(title)
 	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
@@ -646,36 +633,6 @@ func (m Model) renderPrefs() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
 	}
 	return styled
-}
-
-// wrapText wraps text to fit within maxWidth, respecting existing newlines.
-func wrapText(s string, maxWidth int) []string {
-	if maxWidth < 10 {
-		maxWidth = 10
-	}
-	var result []string
-	for _, paragraph := range strings.Split(s, "\n") {
-		if paragraph == "" {
-			result = append(result, "")
-			continue
-		}
-		words := strings.Fields(paragraph)
-		if len(words) == 0 {
-			result = append(result, "")
-			continue
-		}
-		line := words[0]
-		for _, w := range words[1:] {
-			if len(line)+1+len(w) > maxWidth {
-				result = append(result, line)
-				line = w
-			} else {
-				line += " " + w
-			}
-		}
-		result = append(result, line)
-	}
-	return result
 }
 
 func formatSize(bytes int64) string {

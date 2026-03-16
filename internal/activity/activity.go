@@ -154,17 +154,9 @@ func TailFile(path string, maxEntries int) []Entry {
 
 // FormatEntry returns a human-readable display string for an entry.
 func FormatEntry(e Entry) string {
-	switch e.Type {
-	case "tool_use":
-		return formatToolEntry(e)
-	case "text":
-		return e.Summary
-	default:
+	if e.Type != "tool_use" {
 		return e.Summary
 	}
-}
-
-func formatToolEntry(e Entry) string {
 	switch e.Tool {
 	case "Read":
 		return "Reading " + extractFilename(e.Summary)
@@ -173,14 +165,11 @@ func formatToolEntry(e Entry) string {
 	case "Write":
 		return "Writing " + extractFilename(e.Summary)
 	case "Bash":
-		cmd := strings.TrimPrefix(e.Summary, "Bash: ")
-		return "Running " + cmd
+		return "Running " + strings.TrimPrefix(e.Summary, "Bash: ")
 	case "Grep":
-		pat := strings.TrimPrefix(e.Summary, "Grep: ")
-		return "Searching " + pat
+		return "Searching " + strings.TrimPrefix(e.Summary, "Grep: ")
 	case "Glob":
-		pat := strings.TrimPrefix(e.Summary, "Glob: ")
-		return "Finding " + pat
+		return "Finding " + strings.TrimPrefix(e.Summary, "Glob: ")
 	default:
 		return e.Tool
 	}

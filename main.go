@@ -63,7 +63,7 @@ func main() {
 	}
 
 	projects := project.DiscoverProjects(sessions, cfg)
-	model := tui.New(sessions, projects, cfg, tracker, w)
+	model := tui.New(sessions, projects, cfg, tracker, w, projectsDir)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

@@ -18,7 +18,6 @@ type Session struct {
 	ProjectDir   string
 	SessionName  string // Explicit name from /session-name (empty if not renamed)
 	Title        string
-	FirstMsg     string // Full first user message (up to 500 chars, for detail pane)
 	ContextPct   int
 	MsgCount     int
 	FileSize     int64
@@ -71,8 +70,10 @@ func (s SortField) String() string {
 	return ""
 }
 
+const sortFieldCount = SortByName + 1
+
 func (s SortField) Next() SortField {
-	return (s + 1) % 4
+	return (s + 1) % sortFieldCount
 }
 
 // SortDir is ascending or descending.
