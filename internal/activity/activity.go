@@ -9,9 +9,15 @@ import (
 	"time"
 )
 
+// Entry type constants.
+const (
+	EntryToolUse = "tool_use"
+	EntryText    = "text"
+)
+
 // Entry represents a single activity extracted from a JSONL assistant message.
 type Entry struct {
-	Type      string    // "tool_use" or "text"
+	Type      string    // EntryToolUse or EntryText
 	Tool      string    // "Read", "Edit", "Bash", etc. Empty for text.
 	Summary   string    // "Edit model.go", "Bash: go test ./...", "Fixed the import..."
 	Timestamp time.Time
@@ -69,21 +75,21 @@ func ExtractFromLine(line []byte) []Entry {
 	var entries []Entry
 	for _, block := range l.Message.Content {
 		switch block.Type {
-		case "tool_use":
+		case EntryToolUse:
 			e := Entry{
-				Type:      "tool_use",
+				Type:      EntryToolUse,
 				Tool:      block.Name,
 				Summary:   buildToolSummary(block.Name, block.Input),
 				Timestamp: ts,
 			}
 			entries = append(entries, e)
-		case "text":
+		case EntryText:
 			if block.Text == "" {
 				continue
 			}
 			summary := firstLine(block.Text, 200)
 			e := Entry{
-				Type:      "text",
+				Type:      EntryText,
 				Summary:   summary,
 				Timestamp: ts,
 			}
@@ -154,7 +160,7 @@ func TailFile(path string, maxEntries int) []Entry {
 
 // FormatEntry returns a human-readable display string for an entry.
 func FormatEntry(e Entry) string {
-	if e.Type != "tool_use" {
+	if e.Type != EntryToolUse {
 		return e.Summary
 	}
 	switch e.Tool {

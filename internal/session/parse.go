@@ -194,6 +194,7 @@ func extractContentString(entry *jsonLine) string {
 }
 
 // getStringContent returns content only if it's a plain string (not array).
+// Filters out command-like messages (content starting with '<').
 func getStringContent(entry *jsonLine) string {
 	if entry.Message.Content == nil {
 		return ""
@@ -215,23 +216,16 @@ func stripHTML(s string) string {
 
 // cleanTitle extracts a clean, single-line title from raw message content.
 func cleanTitle(s string) string {
-	// Strip HTML tags
 	s = stripHTML(s)
-	// Take first line only
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 		s = s[:idx]
 	}
-	// Strip markdown heading markers (## Foo → Foo)
 	s = mdHeadingRe.ReplaceAllString(s, "")
-	// Strip bold markers (**foo** → foo)
 	s = mdBoldRe.ReplaceAllString(s, "$1")
-	// Strip remaining lone asterisks/underscores used for emphasis
 	s = strings.ReplaceAll(s, "*", "")
 	s = strings.ReplaceAll(s, "__", "")
-	// Strip leading list/quote markers
 	s = strings.TrimLeft(s, "->+ ")
-	s = strings.TrimSpace(s)
-	return s
+	return strings.TrimSpace(s)
 }
 
 // sessionFile holds info needed to parse a session file.

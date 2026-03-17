@@ -17,9 +17,6 @@ type PaneSnapshot struct {
 // CapturePane captures the last N lines of a tmux window's visible output.
 // Returns a PaneSnapshot or error if the window doesn't exist.
 func CapturePane(sessionID, windowID string, lines int) (PaneSnapshot, error) {
-	if lines <= 0 {
-		lines = 30
-	}
 	content, err := tmux.CapturePaneContent(windowID, lines)
 	if err != nil {
 		return PaneSnapshot{}, err

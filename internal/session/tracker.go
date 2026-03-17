@@ -31,7 +31,10 @@ type Tracker struct {
 }
 
 func trackerPath() string {
-	dir, _ := os.UserCacheDir()
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "ccs", "active.json")
+	}
 	return filepath.Join(dir, "ccs", "active.json")
 }
 

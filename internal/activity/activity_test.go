@@ -17,7 +17,7 @@ func TestExtractFromLine_ToolUse(t *testing.T) {
 	}
 
 	e := entries[0]
-	if e.Type != "tool_use" {
+	if e.Type != EntryToolUse {
 		t.Errorf("expected type tool_use, got %q", e.Type)
 	}
 	if e.Tool != "Edit" {
@@ -42,7 +42,7 @@ func TestExtractFromLine_Text(t *testing.T) {
 	}
 
 	e := entries[0]
-	if e.Type != "text" {
+	if e.Type != EntryText {
 		t.Errorf("expected type text, got %q", e.Type)
 	}
 	if e.Tool != "" {
@@ -190,7 +190,7 @@ func TestFormatEntry_ToolUse(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		e := Entry{Type: "tool_use", Tool: tt.tool, Summary: tt.summary}
+		e := Entry{Type: EntryToolUse, Tool: tt.tool, Summary: tt.summary}
 		got := FormatEntry(e)
 		if got != tt.want {
 			t.Errorf("FormatEntry(%s) = %q, want %q", tt.tool, got, tt.want)
@@ -199,7 +199,7 @@ func TestFormatEntry_ToolUse(t *testing.T) {
 }
 
 func TestFormatEntry_Text(t *testing.T) {
-	e := Entry{Type: "text", Summary: "I've updated the imports"}
+	e := Entry{Type: EntryText, Summary: "I've updated the imports"}
 	got := FormatEntry(e)
 	if got != "I've updated the imports" {
 		t.Errorf("FormatEntry(text) = %q, want %q", got, "I've updated the imports")

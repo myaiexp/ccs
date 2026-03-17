@@ -2,6 +2,7 @@ package config
 
 import (
 	"ccs/internal/types"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -53,7 +54,7 @@ func applyDefaults(cfg *types.Config) {
 func Save(cfg *types.Config) error {
 	path := configPath()
 	if path == "" {
-		return nil
+		return fmt.Errorf("cannot determine config path")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

@@ -254,33 +254,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if err := config.Save(m.config); err != nil {
 					m.errMsg = fmt.Sprintf("Config save error: %v", err)
 				}
-			case 1: // activity lines cycle: 3 → 5 → 10 → 15 → 3
-				switch m.config.ActivityLines {
-				case 3:
-					m.config.ActivityLines = 5
-				case 5:
-					m.config.ActivityLines = 10
-				case 10:
-					m.config.ActivityLines = 15
-				default:
-					m.config.ActivityLines = 3
-				}
+			case 1: // activity lines cycle
+				m.config.ActivityLines = cycleValue(m.config.ActivityLines, []int{3, 5, 10, 15})
 				if err := config.Save(m.config); err != nil {
 					m.errMsg = fmt.Sprintf("Config save error: %v", err)
 				}
-			case 2: // name length cycle: 12 → 16 → 20 → 24 → 30 → 12
-				switch m.config.ProjectNameMax {
-				case 12:
-					m.config.ProjectNameMax = 16
-				case 16:
-					m.config.ProjectNameMax = 20
-				case 20:
-					m.config.ProjectNameMax = 24
-				case 24:
-					m.config.ProjectNameMax = 30
-				default:
-					m.config.ProjectNameMax = 12
-				}
+			case 2: // name length cycle
+				m.config.ProjectNameMax = cycleValue(m.config.ProjectNameMax, []int{12, 16, 20, 24, 30})
 				if err := config.Save(m.config); err != nil {
 					m.errMsg = fmt.Sprintf("Config save error: %v", err)
 				}
@@ -296,9 +276,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "y":
 			if m.confirmSess != nil {
-				os.Remove(m.confirmSess.FilePath)
+				if err := os.Remove(m.confirmSess.FilePath); err != nil && !os.IsNotExist(err) {
+					m.errMsg = fmt.Sprintf("Delete error: %v", err)
+				}
 				subagentsDir := strings.TrimSuffix(m.confirmSess.FilePath, ".jsonl")
-				os.RemoveAll(subagentsDir)
+				if err := os.RemoveAll(subagentsDir); err != nil {
+					m.errMsg = fmt.Sprintf("Delete error: %v", err)
+				}
 				m.confirming = false
 				m.confirmSess = nil
 				return m, refreshCmd()
@@ -543,7 +527,7 @@ func (m Model) handleFollow() (Model, tea.Cmd) {
 	}
 
 	m.followID = sess.ID
-	return m, m.startPaneCapture(sess.ID)
+	return m, m.captureCmdForSession(sess.ID)
 }
 
 func (m *Model) toggleHideSession() {
@@ -883,6 +867,7 @@ func watchCmd(w *watcher.Watcher) tea.Cmd {
 func (m *Model) handleRefresh() tea.Cmd {
 	sessions, err := session.DiscoverSessions(m.projectsDir)
 	if err != nil {
+		m.errMsg = fmt.Sprintf("Session discovery error: %v", err)
 		return nil
 	}
 
@@ -955,8 +940,13 @@ func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
 	return paneCaptureCmd(sessionID, wid, 30)
 }
 
-// startPaneCapture triggers an immediate pane capture for the followed session.
-// The periodic tick from Init() handles subsequent captures.
-func (m *Model) startPaneCapture(sessionID string) tea.Cmd {
-	return m.captureCmdForSession(sessionID)
+// cycleValue advances current to the next value in the cycle, wrapping to the first.
+func cycleValue(current int, values []int) int {
+	for i, v := range values {
+		if v == current {
+			return values[(i+1)%len(values)]
+		}
+	}
+	return values[0]
 }
+

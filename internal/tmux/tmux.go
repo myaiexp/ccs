@@ -23,16 +23,9 @@ func Bootstrap(sessionName string) error {
 	return syscall.Exec(tmuxPath, []string{"tmux", "new-session", "-s", sessionName, "ccs"}, os.Environ())
 }
 
-// newWindowArgs builds the argument slice for a tmux new-window command.
-func newWindowArgs(name, dir string, cmdAndArgs []string) []string {
-	args := []string{"new-window", "-P", "-F", "#{window_id}", "-n", name, "-c", dir}
-	args = append(args, cmdAndArgs...)
-	return args
-}
-
 // NewWindow creates a new tmux window and returns its window ID.
 func NewWindow(name, dir string, cmdAndArgs []string) (string, error) {
-	args := newWindowArgs(name, dir, cmdAndArgs)
+	args := append([]string{"new-window", "-P", "-F", "#{window_id}", "-n", name, "-c", dir}, cmdAndArgs...)
 	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
 		return "", err
@@ -40,15 +33,9 @@ func NewWindow(name, dir string, cmdAndArgs []string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// selectWindowArgs builds the argument slice for a tmux select-window command.
-func selectWindowArgs(windowID string) []string {
-	return []string{"select-window", "-t", windowID}
-}
-
 // SelectWindow focuses the given tmux window.
 func SelectWindow(windowID string) error {
-	args := selectWindowArgs(windowID)
-	return exec.Command("tmux", args...).Run()
+	return exec.Command("tmux", "select-window", "-t", windowID).Run()
 }
 
 // CapturePaneContent captures the last N lines of a tmux window's visible output.
@@ -165,6 +152,19 @@ func collapseTaskList(content string) string {
 	completedTasks := 0
 	inTaskBlock := false
 
+	emitTaskBlock := func() {
+		if totalTasks > 0 && len(activeTasks) > 0 {
+			if completedTasks > 0 {
+				result = append(result, fmt.Sprintf("  %d/%d done", completedTasks, totalTasks))
+			}
+			result = append(result, activeTasks...)
+		}
+		activeTasks = nil
+		totalTasks = 0
+		completedTasks = 0
+		inTaskBlock = false
+	}
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		marker, isTodo := todoLineMarker(trimmed)
@@ -179,28 +179,14 @@ func collapseTaskList(content string) string {
 			case "pending":
 			}
 		} else {
-			// If we just left a task block, emit the summary + active tasks
 			if inTaskBlock {
-				if totalTasks > 0 && len(activeTasks) > 0 {
-					if completedTasks > 0 {
-						result = append(result, fmt.Sprintf("  %d/%d done", completedTasks, totalTasks))
-					}
-					result = append(result, activeTasks...)
-				}
-				activeTasks = nil
-				totalTasks = 0
-				completedTasks = 0
-				inTaskBlock = false
+				emitTaskBlock()
 			}
 			result = append(result, line)
 		}
 	}
-	// Handle task block at end of content
-	if inTaskBlock && totalTasks > 0 && len(activeTasks) > 0 {
-		if completedTasks > 0 {
-			result = append(result, fmt.Sprintf("  %d/%d done", completedTasks, totalTasks))
-		}
-		result = append(result, activeTasks...)
+	if inTaskBlock {
+		emitTaskBlock()
 	}
 
 	return strings.Join(result, "\n")
