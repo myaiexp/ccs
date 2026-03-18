@@ -8,11 +8,23 @@ import (
 	"time"
 )
 
+// Status constants for SessionState.Status (serialized as JSON strings).
+const (
+	StatusOpen = "open"
+	StatusDone = "done"
+)
+
+// NameSource constants for SessionState.NameSource.
+const (
+	NameSourceAuto   = "auto"
+	NameSourceManual = "manual"
+)
+
 // SessionState holds the lifecycle state and ccs-owned metadata for a session.
 type SessionState struct {
-	Status      string     `json:"status"`       // "open" or "done"
+	Status      string     `json:"status"`      // StatusOpen or StatusDone
 	Name        string     `json:"name"`
-	NameSource  string     `json:"name_source"`  // "auto" or "manual"
+	NameSource  string     `json:"name_source"` // NameSourceAuto or NameSourceManual
 	CompletedAt *time.Time `json:"completed_at"`
 }
 
@@ -86,7 +98,7 @@ func (s *Store) MarkOpen(id string) {
 	defer s.mu.Unlock()
 
 	st := s.sessions[id]
-	st.Status = "open"
+	st.Status = StatusOpen
 	s.sessions[id] = st
 	s.save()
 }
@@ -98,7 +110,7 @@ func (s *Store) MarkDone(id string) {
 	defer s.mu.Unlock()
 
 	st := s.sessions[id]
-	st.Status = "done"
+	st.Status = StatusDone
 	now := time.Now()
 	st.CompletedAt = &now
 	s.sessions[id] = st
@@ -114,7 +126,7 @@ func (s *Store) Reopen(id string) {
 	if !ok {
 		return
 	}
-	st.Status = "open"
+	st.Status = StatusOpen
 	st.CompletedAt = nil
 	s.sessions[id] = st
 	s.save()
@@ -127,7 +139,7 @@ func (s *Store) SetName(id, name, source string) {
 	defer s.mu.Unlock()
 
 	st := s.sessions[id]
-	if st.NameSource == "manual" && source == "auto" {
+	if st.NameSource == NameSourceManual && source == NameSourceAuto {
 		return
 	}
 	st.Name = name

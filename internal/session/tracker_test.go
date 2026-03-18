@@ -13,7 +13,7 @@ func TestTracker_TrackAndOpenIDs(t *testing.T) {
 	tracker.Track("sess-1", "/proj/a", os.Getpid())
 	tracker.Track("sess-2", "/proj/b", os.Getpid())
 
-	ids := tracker.OpenSessionIDs()
+	ids := tracker.ActiveSessionIDs()
 	if !ids["sess-1"] || !ids["sess-2"] {
 		t.Error("expected both session IDs to be open")
 	}
@@ -26,7 +26,7 @@ func TestTracker_PruneDeadPIDs(t *testing.T) {
 
 	tracker.Refresh()
 
-	ids := tracker.OpenSessionIDs()
+	ids := tracker.ActiveSessionIDs()
 	if !ids["alive"] {
 		t.Error("alive session should still be tracked")
 	}
@@ -35,12 +35,12 @@ func TestTracker_PruneDeadPIDs(t *testing.T) {
 	}
 }
 
-func TestTracker_OpenProjectDirs(t *testing.T) {
+func TestTracker_ActiveProjectDirs(t *testing.T) {
 	tracker := &Tracker{path: "/dev/null"}
 	tracker.Track("", "/proj/a", os.Getpid())
 	tracker.Track("sess-1", "/proj/b", os.Getpid())
 
-	dirs := tracker.OpenProjectDirs()
+	dirs := tracker.ActiveProjectDirs()
 	if !dirs["/proj/a"] || !dirs["/proj/b"] {
 		t.Error("expected both project dirs to be open")
 	}

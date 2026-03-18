@@ -150,8 +150,8 @@ func (t *Tracker) Refresh() {
 	t.save()
 }
 
-// OpenSessionIDs returns the set of session IDs that are currently open.
-func (t *Tracker) OpenSessionIDs() map[string]bool {
+// ActiveSessionIDs returns the set of session IDs that are currently active.
+func (t *Tracker) ActiveSessionIDs() map[string]bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -164,9 +164,9 @@ func (t *Tracker) OpenSessionIDs() map[string]bool {
 	return ids
 }
 
-// OpenProjectDirs returns project dirs that have open processes
+// ActiveProjectDirs returns project dirs that have active processes
 // (including those without a session ID yet).
-func (t *Tracker) OpenProjectDirs() map[string]bool {
+func (t *Tracker) ActiveProjectDirs() map[string]bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -207,7 +207,7 @@ func (t *Tracker) TmuxWindowIDs() map[string]string {
 
 // MarkActive sets ActiveSource on sessions based on tracker state.
 func (t *Tracker) MarkActive(sessions []types.Session) {
-	openIDs := t.OpenSessionIDs()
+	openIDs := t.ActiveSessionIDs()
 	tmuxWindows := t.TmuxWindowIDs()
 	for i := range sessions {
 		if openIDs[sessions[i].ID] {

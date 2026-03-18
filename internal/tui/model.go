@@ -192,7 +192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AutoNameMsg:
 		if msg.Name != "" {
-			m.state.SetName(msg.SessionID, msg.Name, "auto")
+			m.state.SetName(msg.SessionID, msg.Name, state.NameSourceAuto)
 		}
 		return m, nil
 
@@ -375,7 +375,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			value := strings.TrimSpace(m.renameInput.Value())
 			if value != "" {
-				m.state.SetName(m.renameTarget, value, "manual")
+				m.state.SetName(m.renameTarget, value, state.NameSourceManual)
 			}
 			m.renaming = false
 			m.renameTarget = ""
@@ -863,7 +863,7 @@ func (m *Model) detailPaneLines() int {
 // computeStateStatuses sets StateStatus on each session by merging tracker and state store.
 // Returns IDs of sessions that were just promoted to open.
 func computeStateStatuses(sessions []types.Session, tracker *session.Tracker, st *state.Store) []string {
-	openIDs := tracker.OpenSessionIDs()
+	openIDs := tracker.ActiveSessionIDs()
 	var promoted []string
 	for i := range sessions {
 		id := sessions[i].ID
@@ -875,9 +875,9 @@ func computeStateStatuses(sessions []types.Session, tracker *session.Tracker, st
 			}
 		} else if ss, ok := st.Get(id); ok {
 			switch ss.Status {
-			case "open":
+			case state.StatusOpen:
 				sessions[i].StateStatus = types.StatusOpen
-			case "done":
+			case state.StatusDone:
 				sessions[i].StateStatus = types.StatusDone
 			default:
 				sessions[i].StateStatus = types.StatusUntracked
