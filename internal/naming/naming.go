@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -68,37 +67,3 @@ func parseResponse(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-// TailFileLines reads the last maxLines lines from a file as plain text.
-func TailFileLines(path string, maxLines int) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
-	// Read last 32KB
-	const tailSize = 32 * 1024
-	stat, err := f.Stat()
-	if err != nil {
-		return ""
-	}
-
-	offset := stat.Size() - tailSize
-	if offset < 0 {
-		offset = 0
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return ""
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return ""
-	}
-
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	return strings.Join(lines, "\n")
-}

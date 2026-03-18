@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -51,7 +52,7 @@ type toolInput struct {
 // ExtractFromLine parses a single JSONL line and returns activity entries.
 // Returns nil if the line is not an assistant message or is malformed.
 func ExtractFromLine(line []byte) []Entry {
-	line = trimLine(line)
+	line = bytes.TrimSpace(line)
 	if len(line) == 0 {
 		return nil
 	}
@@ -230,15 +231,37 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func trimLine(line []byte) []byte {
-	// Trim whitespace/newlines.
-	start := 0
-	end := len(line)
-	for start < end && (line[start] == ' ' || line[start] == '\t' || line[start] == '\n' || line[start] == '\r') {
-		start++
+// TailFileLines reads the last maxLines lines from a file as plain text.
+func TailFileLines(path string, maxLines int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
 	}
-	for end > start && (line[end-1] == ' ' || line[end-1] == '\t' || line[end-1] == '\n' || line[end-1] == '\r') {
-		end--
+	defer f.Close()
+
+	const tailSize = 32 * 1024
+	stat, err := f.Stat()
+	if err != nil {
+		return ""
 	}
-	return line[start:end]
+
+	offset := stat.Size() - tailSize
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return ""
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n")
 }
+

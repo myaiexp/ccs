@@ -902,7 +902,7 @@ func (m *Model) namingContent(sessionID string) string {
 	}
 	for _, s := range m.sessions {
 		if s.ID == sessionID && s.FilePath != "" {
-			return naming.TailFileLines(s.FilePath, m.config.AutoNameLines)
+			return activity.TailFileLines(s.FilePath, m.config.AutoNameLines)
 		}
 	}
 	return ""

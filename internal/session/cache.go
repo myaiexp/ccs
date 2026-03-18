@@ -21,7 +21,10 @@ type sessionCache struct {
 }
 
 func cachePath() string {
-	dir, _ := os.UserCacheDir()
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = filepath.Join(os.TempDir(), "ccs")
+	}
 	return filepath.Join(dir, "ccs", "sessions.json")
 }
 
