@@ -3,6 +3,7 @@
 Go TUI (bubbletea/lipgloss) that serves as a mission control dashboard for Claude Code sessions. Three-section layout: active sessions (expanded with live status), open sessions (scrollable with detail pane), and a footer with done count. Session lifecycle states (active/open/done), auto-naming via Haiku, and unified search replacing the project grid.
 
 ## Stack
+
 - Go 1.25+
 - bubbletea (TUI framework), lipgloss (styling), bubbles (textinput)
 - sahilm/fuzzy (fuzzy search), BurntSushi/toml (config)
@@ -10,6 +11,7 @@ Go TUI (bubbletea/lipgloss) that serves as a mission control dashboard for Claud
 - tmux capture-pane (live terminal output)
 
 ## Structure
+
 ```
 main.go                    Entry point, tmux bootstrap, wires up data loading → TUI
 internal/
@@ -34,12 +36,14 @@ internal/
 ```
 
 ## Build & Install
+
 ```bash
 go build -o ~/.local/bin/ccs .
 go test ./... -count=1          # tests for all packages
 ```
 
 ## Key Design Decisions
+
 - **Session lifecycle** — four states: Active (PID alive, computed), Open (persisted in state.json), Done (user-marked), Untracked (legacy). Active sessions auto-promote to Open. State stored in `~/.cache/ccs/state.json`.
 - **Three-section layout** — Active section (always visible, expanded rows with live status), Open section (scrollable, selected shows detail pane), Done/Untracked (toggled with `h`). Unified j/k navigation across all sections.
 - **Auto-naming** — shells out to `claude --print --model haiku --no-session-persistence` with pane capture or JSONL tail content. Triggers: 30s after promotion, on session going inactive, manual `N` key. Manual names (`R`) never overwritten.
@@ -56,10 +60,13 @@ go test ./... -count=1          # tests for all packages
 - **lipgloss `.Width()` includes padding** — must subtract padding for text width calculations.
 
 ## Key Bindings
+
 `enter` switch/resume, `1-9` shortcuts, `f` follow, `c` complete, `o` reopen, `R` rename, `N` auto-name, `/` search, `s` sort, `r` reverse, `d` delete, `h` toggle done/untracked, `p` prefs, `j/k/↑↓` navigate, `gg/G` top/bottom, `?` help, `esc` exit follow/clear filter, `q` quit
 
 ## Config
+
 `~/.config/ccs/config.toml`:
+
 ```toml
 hidden_sessions = ["session-uuid-1"]
 claude_flags = ["--dangerously-skip-permissions"]
@@ -69,11 +76,30 @@ activity_lines = 5           # activity entries shown in detail pane (cycle: 3/5
 auto_name_lines = 20         # lines fed to haiku for naming (cycle: 10/20/30/50 in prefs)
 ```
 
-## Docs
-- `PLAN.md` — architecture plan and potential future work
-- `docs/plans/2026-03-18-mission-control-rework-design.md` — mission control rework design spec
-- `docs/plans/2026-03-18-mission-control-rework-plan.md` — implementation plan
-- `docs/plans/2026-03-07-ccs-tui-design.md` — original design doc
-- `docs/plans/2026-03-07-ccs-implementation-plan.md` — original implementation plan
-- `.claude/phases/current.md` — phase tracking
-- `.claude/ideas.md` — feature ideas and deferred work from brainstorming
+## Doc Management
+
+This project splits documentation to minimize context usage. Follow these rules:
+
+### File layout
+
+| File                         | Purpose                                                        | When to read                              |
+| ---------------------------- | -------------------------------------------------------------- | ----------------------------------------- |
+| `CLAUDE.md` (this file)      | Project identity, structure, patterns, current phase pointer   | Auto-loaded every session                 |
+| `.claude/phases/current.md`  | Symlink → active phase file                                    | Read when starting phase work             |
+| `.claude/phases/NNN-name.md` | Phase files (active via symlink, completed ones local-only)    | Only if you need historical context       |
+| `.claude/ideas.md`           | Future feature ideas, tech debt, and enhancements              | When planning next phase or brainstorming |
+| `.claude/plans/`             | Design docs and implementation plans from brainstorming        | When implementing or reviewing designs    |
+| `.claude/references/`        | Domain reference material (specs, external docs, data sources) | When you need domain knowledge            |
+| `.claude/[freeform].md`      | Project-specific context docs (architecture, deployment, etc.) | As referenced from this file              |
+
+Also: `PLAN.md` — architecture plan and potential future work
+
+### Phase transitions
+
+When a phase is completed:
+
+1. **Condense** — extract lasting decisions from the active phase file and add to "Decisions from previous phases". Keep each to 1-2 lines.
+2. **Archive** — remove the `current.md` symlink. The completed phase file stays but is no longer committed.
+3. **Start fresh** — create a new numbered phase file from `~/.claude/phase-template.md`, then symlink `current.md` → it.
+4. **Update this file** — update the "Current Phase" section above.
+5. **Prune** — remove anything from this file that was phase-specific and no longer applies.
