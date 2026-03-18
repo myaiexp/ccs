@@ -271,20 +271,15 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 	isSelected := globalIdx == m.sessionIdx
 	contentWidth := m.width - 4
 
-	// Badge
 	dot := activeDot
-
-	// Number
 	numStr := fmt.Sprintf("%4d", globalIdx+1)
 	num := numStyle.Render(numStr)
 
-	// Project name
 	projName := s.ProjectName
 	if len(projName) > 20 {
 		projName = projName[:19] + "…"
 	}
 
-	// Display name
 	name := m.displayName(s)
 	if len([]rune(name)) > 30 {
 		name = string([]rune(name)[:29]) + "…"
@@ -302,13 +297,11 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 		status = statusStyle.Render(status)
 	}
 
-	// Right side
 	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
 	timeStr := dimStyle.Render(formatDuration(s.LastActive))
 	rightSide := ctxStr + " " + timeStr
 	rightWidth := lipgloss.Width(rightSide)
 
-	// Header line
 	leftParts := fmt.Sprintf("%s %s %s  %s", dot, num, projName, name)
 	if status != "" {
 		leftParts += "  " + status
@@ -454,7 +447,6 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
-	// Header line
 	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
 	timePart := dimStyle.Render(formatDuration(s.LastActive))
 	rightSide := ctxPart + " " + timePart
@@ -477,7 +469,6 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 	headerLine := leftSide + strings.Repeat(" ", gap) + rightSide
 
-	// Info line
 	sizeStr := formatSize(s.FileSize)
 	dirWithSession := s.ProjectDir + "/" + s.ID
 	msgsPart := "  " + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " + detailValueStyle.Render(sizeStr)
@@ -492,14 +483,8 @@ func (m Model) renderDetail(s types.Session) string {
 	lines := []string{headerLine, infoLine, "", status}
 
 	// Activity / terminal content
-	hasPaneCapture := false
 	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-		hasPaneCapture = true
-	}
-
-	if hasPaneCapture {
 		lines = append(lines, "")
-		snap := m.paneContent[s.ID]
 		paneLines := strings.Split(snap.Content, "\n")
 		maxLines := m.activityLines()
 		if len(paneLines) > maxLines {
@@ -514,9 +499,7 @@ func (m Model) renderDetail(s types.Session) string {
 			}
 		}
 		lines = append(lines, paneLines...)
-	}
-
-	if !hasPaneCapture {
+	} else {
 		entries := m.activities[s.ID]
 		if len(entries) == 0 && s.FilePath != "" {
 			entries = activity.TailFile(s.FilePath, m.activityLines())
