@@ -118,8 +118,8 @@ Mutex-protected, saves on every mutation (same pattern as tracker).
 
 - When tracker detects a new active session with no state.json entry → auto-promote to `open`
 - When an active session's PID dies → stays `open` (user explicitly marks `done`)
-- `c` key → marks `done`, sets `completed_at`
-- `o` key → reopens to `open`, clears `completed_at`
+- `c` key → marks `done`, sets `completed_at`. Disallowed on active sessions (shows "session still running" error) — complete after the session ends.
+- `o` key → reopens a `done` session to `open`, clears `completed_at`. No-op on sessions that aren't `Done`.
 
 ### Types Changes
 
@@ -176,7 +176,7 @@ OPEN (4)
 - Each active session gets 2-3 lines: header (project, name, live status, ctx%, time) + 1-2 lines of pane capture
 - Live status derived from pane capture (see Attention States)
 - Sorted by most recent activity first
-- Not directly navigable with j/k — it's a dashboard. Interact via `enter` (switch), `f` (follow), or number shortcuts.
+- Navigable with j/k — cursor moves through active then open as one continuous list. Active sessions are numbered first (1-N), open sessions continue numbering after. The active section is visually distinct (expanded rows) but not a separate navigation zone.
 
 **Open section:**
 - Scrollable, this is where j/k navigation lives
@@ -213,9 +213,9 @@ echo "<prompt>" | claude --print --model haiku --no-session-persistence
 
 ### Trigger Points
 
-1. **Session promoted to open** — when tracker first detects a session as active and it has no state.json entry. Fires once with available pane content.
-2. **Session goes inactive** — when a previously active session's PID dies. Fires once with last pane snapshot. Overwrites the auto-name from trigger 1 (the "final summary" is usually better).
-3. **Manual trigger** — `N` key on any selected session. Re-runs auto-naming.
+1. **Session promoted to open** — when tracker first detects a session as active and it has no state.json entry. Delayed ~30s after promotion to let content accumulate. Uses pane capture if available, falls back to JSONL tail. Often produces SKIP or a rough name — this is expected.
+2. **Session goes inactive** — when a previously active session's PID dies. Fires once with last pane snapshot (stored in memory from capture polling). This is the primary naming path — the final state usually produces the best summary. Overwrites any auto-name from trigger 1.
+3. **Manual trigger** — `N` key on any selected session. Re-runs auto-naming using JSONL tail (since pane capture may not be available for inactive sessions).
 
 Auto-naming only runs when `name_source != "manual"`. Manual names (set via `R`) are never overwritten.
 
@@ -260,7 +260,7 @@ Scans pane content bottom-up:
 | Error      | Lines with "Error:", "FAIL", "error:" in recent output | `Error: <detail>`          |
 | Working    | Default — falls back to latest activity entry          | `Editing file.go`, etc.    |
 
-Pattern matching only, no AI. Must be fast (runs every second).
+Pattern matching only, no AI. Must be fast (runs every second). Note: status detection is best-effort — false positives are expected (e.g., a stuck subprocess showing a shell prompt may register as "Waiting for input" when Claude is actually working).
 
 ---
 
@@ -293,9 +293,11 @@ State badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` projec
 **Actions:**
 - `enter` on active session → switch to tmux window
 - `enter` on inactive session → resume in new tmux window
-- `enter` on project dir → launch new session there
+- `enter` on project dir → launch new session there (uses project dir path string, not `types.Project`)
 - `esc` → clear search, return to normal view
 - Session keys (`c`, `R`, etc.) work on selected search result
+
+**Search result type:** Results are a union — either a session (with `StateStatus` badge) or a project directory (path string + display name). `TmuxLaunchNew` will be adapted to accept a directory path string instead of requiring `types.Project`.
 
 ---
 
@@ -307,10 +309,10 @@ State badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` projec
 | ------ | ----------------------------------------------------------------- |
 | `c`    | Complete — mark selected session as done                          |
 | `o`    | Reopen — move done session back to open                           |
-| `R`    | Rename — inline text input for manual session name                |
+| `R`    | Rename — text input appears in footer area, pre-filled with current name. Enter confirms, Esc cancels. |
 | `N`    | Auto-name — re-trigger haiku naming on selected session           |
 | `h`    | Toggle showing done/untracked sessions                            |
-| `j/k`  | Navigate within open section (active is display-only)             |
+| `j/k`  | Navigate through active + open as one continuous list             |
 | `enter`| Active → switch to tmux window. Otherwise → resume in new window  |
 | `f`    | Follow mode (active sessions only, as current)                    |
 | `d`    | Delete JSONL file (with confirm, as current)                      |
@@ -345,7 +347,7 @@ State badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` projec
 - `project_name_max` — no project grid
 
 **Kept:**
-- `hidden_sessions` — manual override, mostly replaced by lifecycle
+- `hidden_sessions` — manual-edit-only escape hatch (no UI key to add entries since `x` is removed). For edge cases like spam sessions you never want to see regardless of lifecycle state.
 - `claude_flags` — for launching sessions
 - `relative_numbers` — display preference
 - `tmux_session_name` — tmux bootstrap
@@ -379,6 +381,9 @@ State badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` projec
 - Project grid layout/rendering code in `views.go` and `model.go`
 - `FocusProjects`, `projectIdx`, `filteredProj`, grid navigation, `computeGridLayout()`
 - `hidden_projects` config handling
+
+### Minor Changes
+- `internal/tui/views.go` — `formatDuration()` needs day support (e.g., "2d", "5d") for the new layout mockups
 
 ### Unchanged
 - `internal/session/parse.go` — JSONL parsing stays the same
