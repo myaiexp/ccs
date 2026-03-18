@@ -501,9 +501,6 @@ func (m Model) renderDetail(s types.Session) string {
 		lines = append(lines, paneLines...)
 	} else {
 		entries := m.activities[s.ID]
-		if len(entries) == 0 && s.FilePath != "" {
-			entries = activity.TailFile(s.FilePath, m.activityLines())
-		}
 		if len(entries) > 0 {
 			lines = append(lines, "")
 			maxEntries := m.activityLines()

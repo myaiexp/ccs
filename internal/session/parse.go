@@ -371,3 +371,17 @@ func DiscoverSessions(projectsDir string) ([]types.Session, error) {
 	return sessions, nil
 }
 
+// LoadSessions discovers sessions, refreshes tracker state, matches new sessions,
+// and marks active sessions. This is the canonical session loading sequence used
+// by both startup (main.go) and refresh (handleRefresh).
+func LoadSessions(projectsDir string, tracker *Tracker) ([]types.Session, error) {
+	sessions, err := DiscoverSessions(projectsDir)
+	if err != nil {
+		return nil, err
+	}
+	tracker.Refresh()
+	tracker.MatchNewSession(sessions)
+	tracker.MarkActive(sessions)
+	return sessions, nil
+}
+

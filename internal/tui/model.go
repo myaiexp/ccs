@@ -934,15 +934,11 @@ func watchCmd(w *watcher.Watcher) tea.Cmd {
 }
 
 func (m *Model) handleRefresh() tea.Cmd {
-	sessions, err := session.DiscoverSessions(m.projectsDir)
+	sessions, err := session.LoadSessions(m.projectsDir, m.tracker)
 	if err != nil {
 		m.errMsg = fmt.Sprintf("Session discovery error: %v", err)
 		return nil
 	}
-
-	m.tracker.Refresh()
-	m.tracker.MatchNewSession(sessions)
-	m.tracker.MarkActive(sessions)
 
 	justPromoted := computeStateStatuses(sessions, m.tracker, m.state)
 
@@ -953,62 +949,87 @@ func (m *Model) handleRefresh() tea.Cmd {
 		}
 	}
 
-	var namingCmds []tea.Cmd
-
-	// Sessions that just went inactive → immediate naming
-	for id := range m.prevActiveIDs {
-		if !newActiveIDs[id] {
-			content := m.namingContent(id)
-			if content != "" {
-				namingCmds = append(namingCmds, autoNameCmd(id, content, m.config.AutoNameLines))
-			}
-		}
-	}
-
-	// Newly promoted sessions → delayed naming (30s)
-	for _, id := range justPromoted {
-		sid := id
-		namingCmds = append(namingCmds, tea.Tick(30*time.Second, func(time.Time) tea.Msg {
-			return AutoNameTriggerMsg{SessionID: sid}
-		}))
-	}
-
+	namingCmds := m.scheduleNamingTriggers(newActiveIDs, justPromoted)
 	m.prevActiveIDs = newActiveIDs
 
-	// Diff active sessions to update watcher
-	if m.watcher != nil {
-		newActive := make(map[string]string)
-		for _, s := range sessions {
-			if s.StateStatus == types.StatusActive && s.FilePath != "" {
-				newActive[s.ID] = s.FilePath
-			}
-		}
-		oldActive := make(map[string]string)
-		for _, s := range m.sessions {
-			if s.StateStatus == types.StatusActive && s.FilePath != "" {
-				oldActive[s.ID] = s.FilePath
-			}
-		}
-		for id, path := range newActive {
-			if _, was := oldActive[id]; !was {
-				_ = m.watcher.Watch(id, path)
-			}
-		}
-		for id, path := range oldActive {
-			if _, is := newActive[id]; !is {
-				m.watcher.Unwatch(path)
-			}
-		}
-	}
+	m.syncWatcher(sessions)
 
 	m.sessions = sessions
 	m.projectDirs = project.ScanProjectDirs(m.projectsRoot)
+	m.eagerLoadActivities()
 	m.applyFilter()
 
 	if len(namingCmds) > 0 {
 		return tea.Batch(namingCmds...)
 	}
 	return nil
+}
+
+// scheduleNamingTriggers returns naming commands for sessions that just went
+// inactive (immediate) or were just promoted (delayed 30s).
+func (m *Model) scheduleNamingTriggers(newActiveIDs map[string]bool, justPromoted []string) []tea.Cmd {
+	var cmds []tea.Cmd
+
+	for id := range m.prevActiveIDs {
+		if !newActiveIDs[id] {
+			content := m.namingContent(id)
+			if content != "" {
+				cmds = append(cmds, autoNameCmd(id, content, m.config.AutoNameLines))
+			}
+		}
+	}
+
+	for _, id := range justPromoted {
+		sid := id
+		cmds = append(cmds, tea.Tick(30*time.Second, func(time.Time) tea.Msg {
+			return AutoNameTriggerMsg{SessionID: sid}
+		}))
+	}
+
+	return cmds
+}
+
+// syncWatcher adds/removes watched files to match the current active session set.
+func (m *Model) syncWatcher(sessions []types.Session) {
+	if m.watcher == nil {
+		return
+	}
+
+	newActive := make(map[string]string)
+	for _, s := range sessions {
+		if s.StateStatus == types.StatusActive && s.FilePath != "" {
+			newActive[s.ID] = s.FilePath
+		}
+	}
+	oldActive := make(map[string]string)
+	for _, s := range m.sessions {
+		if s.StateStatus == types.StatusActive && s.FilePath != "" {
+			oldActive[s.ID] = s.FilePath
+		}
+	}
+
+	for id, path := range newActive {
+		if _, was := oldActive[id]; !was {
+			_ = m.watcher.Watch(id, path)
+		}
+	}
+	for id, path := range oldActive {
+		if _, is := newActive[id]; !is {
+			m.watcher.Unwatch(path)
+		}
+	}
+}
+
+// eagerLoadActivities populates m.activities for sessions that have a FilePath
+// but no watcher-sourced entries, avoiding I/O inside View().
+func (m *Model) eagerLoadActivities() {
+	for _, s := range m.sessions {
+		if s.FilePath != "" && len(m.activities[s.ID]) == 0 {
+			if entries := activity.TailFile(s.FilePath, m.activityLines()); len(entries) > 0 {
+				m.activities[s.ID] = entries
+			}
+		}
+	}
 }
 
 func paneCaptureCmd(sessionID, windowID string, lines int) tea.Cmd {

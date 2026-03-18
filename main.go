@@ -39,18 +39,12 @@ func main() {
 	}
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
-	sessions, err := session.DiscoverSessions(projectsDir)
+	tracker := session.LoadTracker()
+	sessions, err := session.LoadSessions(projectsDir, tracker)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error discovering sessions: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Load tracker, prune dead PIDs, seed from /proc
-	tracker := session.LoadTracker()
-	tracker.Refresh()
-	tracker.MatchNewSession(sessions)
-
-	tracker.MarkActive(sessions)
 
 	// Create file watcher for activity monitoring
 	w, err := watcher.New(cfg.ActivityLines)
