@@ -26,12 +26,14 @@ type PaneSnapshot struct {
 }
 
 // CapturePane captures the last N lines of a tmux window's visible output.
-// Returns a PaneSnapshot or error if the window doesn't exist.
+// Applies Claude Code-specific content transformations (status bar stripping,
+// task list collapsing) before returning the snapshot.
 func CapturePane(sessionID, windowID string, lines int) (PaneSnapshot, error) {
 	content, err := tmux.CapturePaneContent(windowID, lines)
 	if err != nil {
 		return PaneSnapshot{}, err
 	}
+	content = TransformPaneContent(content)
 	return PaneSnapshot{
 		SessionID:  sessionID,
 		WindowID:   windowID,
