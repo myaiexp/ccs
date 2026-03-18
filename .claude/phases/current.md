@@ -1,27 +1,36 @@
-# All Phases Complete — Maintenance Mode
+# Mission Control Rework — Just Landed
 
-> ccs is feature-complete across all 4 phases. No active phase work. Changes are bug fixes and polish.
+> Major rework from session browser → mission control dashboard. Implemented 2026-03-18. Likely needs debugging and polish.
 
-## Completed Phases
+## What Changed
 
-### Phase 1: Core TUI
-All 8 implementation tasks done. Session discovery, project grid, sorting, filtering, key bindings, tmux bootstrap.
+### New Architecture
+- **Session lifecycle**: Active (PID alive) → Open (persisted) → Done (user-marked). Untracked = legacy sessions not in state.json.
+- **Three-section layout**: Active section (expanded, live status via `DeriveStatus`), Open section (scrollable with detail pane), Done/Untracked (toggled with `h`).
+- **Auto-naming**: Shells out to `claude --print --model haiku` for session names. Triggers on promotion (30s delay), on going inactive, and manual `N` key.
+- **Search rework**: `/` searches all sessions + `~/Projects/` directories. Project grid removed entirely.
 
-### Phase 2: Polish & Usability
-Title extraction, PID-based active detection, sorting/hiding, project grid navigation, inline detail pane, center-scroll, preferences popup, global numbering, number shortcuts 1-9.
+### New Packages
+- `internal/state` — lifecycle persistence to `~/.cache/ccs/state.json`
+- `internal/naming` — haiku invocation for auto-naming
+- `capture.DeriveStatus()` — attention state detection from pane content
 
-### Phase 3: tmux-only + Capture Infrastructure
-Removed inline launch mode (no `tea.Exec`). All sessions open as tmux windows. Added pane capture via `tmux capture-pane` with 1s polling. HUD/spinner stripping from captures.
+### Key Bindings Changed
+- **Added**: `c` (complete), `o` (reopen), `R` (rename), `N` (auto-name)
+- **Removed**: `tab`, `n`, `x`, `left/right` (all project grid related)
 
-### Phase 4: Follow Mode + Polish
-Split-view follow mode (`f` key): compressed session list + live pane capture. Pane capture for all tmux sessions (not just followed). Detail pane shows capture with activity fallback. Inactive sessions show dimmed stale capture. Task list collapsing in pane output.
+### Config Changed
+- **Added**: `auto_name_lines` (default 20)
+- **Removed**: `hidden_projects`, `project_name_max`
 
-## Recent Work (post-phase)
-- Detail pane layout fixes (height, wrapping, width truncation)
-- Grid layout dedup and rune-safe truncation
-- Dead code cleanup and API consistency audit
-- README rewrite and PLAN.md update
+## Known Issues to Debug
+- Navigation may feel different — unified j/k across active+open sections, no tab switching
+- Auto-naming requires `claude` CLI in PATH and existing subscription
+- `DeriveStatus` is regex-based, best-effort — false positives expected
+- Search result → normal view cursor position handoff may not be smooth
+- Mase reported it's "interesting" but needs hands-on debugging
 
-## See Also
-- `PLAN.md` — architecture plan and completed phase details
-- `.claude/ideas.md` — pinned sessions, save/restore, tracker mutex, embedded session view
+## Design Spec
+- `docs/plans/2026-03-18-mission-control-rework-design.md` — full spec
+- `docs/plans/2026-03-18-mission-control-rework-plan.md` — implementation plan
+- `.claude/ideas.md` — deferred ideas from brainstorming (multi-follow, activity feed, tmux alerts, stale nudges, CLI mode, frecency)
