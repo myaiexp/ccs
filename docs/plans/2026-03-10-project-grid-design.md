@@ -30,7 +30,7 @@ Arrow keys map to the grid — left/right across columns, up/down across rows. S
 ```
 PROJECTS
   ccs               spot-price        explorer          superpowers       vps
-  ~                 central-hub       FreshRSS          factorio-solv…    mase.fi
+  ~                 central-hub       factorio-solv…    mase.fi
   poe-crafting      .openclaw         cloned-claude-…   singlepagers      tracker
 ```
 
