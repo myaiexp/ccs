@@ -205,13 +205,12 @@ func (t *Tracker) TmuxWindowIDs() map[string]string {
 	return ids
 }
 
-// MarkActive sets IsActive and ActiveSource on sessions based on tracker state.
+// MarkActive sets ActiveSource on sessions based on tracker state.
 func (t *Tracker) MarkActive(sessions []types.Session) {
 	openIDs := t.OpenSessionIDs()
 	tmuxWindows := t.TmuxWindowIDs()
 	for i := range sessions {
 		if openIDs[sessions[i].ID] {
-			sessions[i].IsActive = true
 			if _, hasTmux := tmuxWindows[sessions[i].ID]; hasTmux {
 				sessions[i].ActiveSource = types.SourceTmux
 			} else {

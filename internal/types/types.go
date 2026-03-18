@@ -47,17 +47,9 @@ type Session struct {
 	FileSize     int64
 	CreatedAt    time.Time
 	LastActive   time.Time
-	IsActive     bool
 	ActiveSource ActiveSource
 	StateStatus  StateStatus
 	FilePath     string
-}
-
-type Project struct {
-	Name       string
-	Dir        string
-	LastActive time.Time
-	HasActive  bool
 }
 
 type Config struct {

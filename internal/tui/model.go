@@ -131,7 +131,7 @@ func (m Model) Init() tea.Cmd {
 
 		// Watch all currently-active sessions
 		for _, s := range m.sessions {
-			if s.IsActive && s.FilePath != "" {
+			if s.StateStatus == types.StatusActive && s.FilePath != "" {
 				_ = m.watcher.Watch(s.ID, s.FilePath)
 			}
 		}
@@ -979,13 +979,13 @@ func (m *Model) handleRefresh() tea.Cmd {
 	if m.watcher != nil {
 		newActive := make(map[string]string)
 		for _, s := range sessions {
-			if s.IsActive && s.FilePath != "" {
+			if s.StateStatus == types.StatusActive && s.FilePath != "" {
 				newActive[s.ID] = s.FilePath
 			}
 		}
 		oldActive := make(map[string]string)
 		for _, s := range m.sessions {
-			if s.IsActive && s.FilePath != "" {
+			if s.StateStatus == types.StatusActive && s.FilePath != "" {
 				oldActive[s.ID] = s.FilePath
 			}
 		}
