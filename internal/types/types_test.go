@@ -2,6 +2,24 @@ package types
 
 import "testing"
 
+func TestStateStatusString(t *testing.T) {
+	tests := []struct {
+		status StateStatus
+		want   string
+	}{
+		{StatusUntracked, "untracked"},
+		{StatusDone, "done"},
+		{StatusOpen, "open"},
+		{StatusActive, "active"},
+		{StateStatus(99), ""},
+	}
+	for _, tt := range tests {
+		if got := tt.status.String(); got != tt.want {
+			t.Errorf("StateStatus(%d).String() = %q, want %q", tt.status, got, tt.want)
+		}
+	}
+}
+
 func TestSortFieldString(t *testing.T) {
 	tests := []struct {
 		field SortField

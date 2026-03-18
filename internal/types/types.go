@@ -11,6 +11,30 @@ const (
 	SourceTmux                  // launched from ccs, has tmux window
 )
 
+// StateStatus represents the merged lifecycle state of a session.
+type StateStatus int
+
+const (
+	StatusUntracked StateStatus = iota
+	StatusDone
+	StatusOpen
+	StatusActive
+)
+
+func (s StateStatus) String() string {
+	switch s {
+	case StatusUntracked:
+		return "untracked"
+	case StatusDone:
+		return "done"
+	case StatusOpen:
+		return "open"
+	case StatusActive:
+		return "active"
+	}
+	return ""
+}
+
 type Session struct {
 	ID           string
 	ShortID      string
@@ -25,6 +49,7 @@ type Session struct {
 	LastActive   time.Time
 	IsActive     bool
 	ActiveSource ActiveSource
+	StateStatus  StateStatus
 	FilePath     string
 }
 
@@ -33,17 +58,15 @@ type Project struct {
 	Dir        string
 	LastActive time.Time
 	HasActive  bool
-	Hidden     bool
 }
 
 type Config struct {
-	HiddenProjects  []string `toml:"hidden_projects"`
 	HiddenSessions  []string `toml:"hidden_sessions"`
 	ClaudeFlags     []string `toml:"claude_flags"`
 	RelativeNumbers bool     `toml:"relative_numbers"`
 	TmuxSessionName string   `toml:"tmux_session_name"`
 	ActivityLines   int      `toml:"activity_lines"`
-	ProjectNameMax  int      `toml:"project_name_max"`
+	AutoNameLines   int      `toml:"auto_name_lines"`
 }
 
 // SortField determines which field to sort by.

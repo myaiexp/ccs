@@ -27,7 +27,6 @@ func tmuxWindowName(proj, title string) string {
 }
 
 // TmuxLaunchResume creates a new tmux window to resume a session.
-// The TUI stays visible (no tea.Exec). Returns TmuxLaunchDoneMsg on completion.
 func TmuxLaunchResume(sess types.Session, flags []string, tracker *session.Tracker) tea.Cmd {
 	return func() tea.Msg {
 		name := tmuxWindowName(sess.ProjectName, sess.Title)
@@ -35,8 +34,7 @@ func TmuxLaunchResume(sess types.Session, flags []string, tracker *session.Track
 		resumeArgs = append(resumeArgs, "claude")
 		resumeArgs = append(resumeArgs, flags...)
 		resumeArgs = append(resumeArgs, "--resume", sess.ID)
-		cmd := resumeArgs
-		windowID, err := tmux.NewWindow(name, sess.ProjectDir, cmd)
+		windowID, err := tmux.NewWindow(name, sess.ProjectDir, resumeArgs)
 		if err != nil {
 			return TmuxLaunchDoneMsg{Err: err}
 		}
@@ -45,17 +43,17 @@ func TmuxLaunchResume(sess types.Session, flags []string, tracker *session.Track
 	}
 }
 
-// TmuxLaunchNew creates a new tmux window for a new session in the given project.
-func TmuxLaunchNew(proj types.Project, flags []string, tracker *session.Tracker) tea.Cmd {
+// TmuxLaunchNew creates a new tmux window for a new session in the given directory.
+func TmuxLaunchNew(dir, name string, flags []string, tracker *session.Tracker) tea.Cmd {
 	return func() tea.Msg {
-		name := proj.Name
-		if runes := []rune(name); len(runes) > 30 {
-			name = string(runes[:30])
+		windowName := name
+		if runes := []rune(windowName); len(runes) > 30 {
+			windowName = string(runes[:30])
 		}
 		cmd := make([]string, 0, len(flags)+1)
 		cmd = append(cmd, "claude")
 		cmd = append(cmd, flags...)
-		_, err := tmux.NewWindow(name, proj.Dir, cmd)
+		_, err := tmux.NewWindow(windowName, dir, cmd)
 		if err != nil {
 			return TmuxLaunchDoneMsg{Err: err}
 		}
@@ -70,4 +68,3 @@ func TmuxSwitch(windowID string) tea.Cmd {
 		return TmuxSwitchDoneMsg{Err: err}
 	}
 }
-

@@ -20,20 +20,25 @@ var (
 			Foreground(lipgloss.Color("245")).
 			MarginTop(1)
 
-	// Active session dot
+	// Active session dot (green ●)
 	activeDot = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("46")).
 			Render("●")
 
-	// Inactive session dot
-	inactiveDot = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
+	// Open badge (○)
+	openBadge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("75")).
 			Render("○")
 
-	// External session dot (detected via /proc, not launched from ccs)
-	externalDot = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("220")).
-			Render("●")
+	// Done badge (✓)
+	doneBadge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Render("✓")
+
+	// Untracked badge (·)
+	untrackedBadge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Render("·")
 
 	// Activity summary style (dim italic for inactive sessions)
 	activityStyle = lipgloss.NewStyle().
@@ -54,9 +59,14 @@ var (
 			Foreground(lipgloss.Color("99")).
 			Bold(true)
 
-	// Project name in session list
-	projectStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("75"))
+	// Status text (for DeriveStatus output)
+	statusStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")).
+			Italic(true)
+
+	// Active row selected highlight
+	activeSelectedStyle = lipgloss.NewStyle().
+				Bold(true)
 
 	// Context percentage colors
 	contextGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
@@ -71,21 +81,6 @@ var (
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240")).
 			MarginTop(1)
-
-	// Selected project in grid
-	selectedProjectStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("255")).
-				Background(lipgloss.Color("236"))
-
-	// Normal project in grid
-	normalProjectStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("75"))
-
-	// Hidden project
-	hiddenProjectStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240")).
-				Italic(true)
 
 	// Session detail pane
 	detailBorderStyle = lipgloss.NewStyle().

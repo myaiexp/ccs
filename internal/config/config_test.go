@@ -16,7 +16,9 @@ func TestLoadReturnsDefaults(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("Load() returned nil config")
 	}
-	// Even if no config file exists, cfg should be a valid zero-value struct
+	if cfg.AutoNameLines != 20 {
+		t.Errorf("expected AutoNameLines default 20, got %d", cfg.AutoNameLines)
+	}
 }
 
 func TestLoadRealConfigIfExists(t *testing.T) {
@@ -49,15 +51,9 @@ func TestTOMLRoundtrip(t *testing.T) {
 		{
 			name: "all fields populated",
 			cfg: types.Config{
-				HiddenProjects: []string{"cloned", ".claude"},
 				HiddenSessions: []string{"abc123", "def456"},
 				ClaudeFlags:    []string{"--dangerously-skip-permissions", "--verbose"},
-			},
-		},
-		{
-			name: "only hidden_projects",
-			cfg: types.Config{
-				HiddenProjects: []string{"secret-project"},
+				AutoNameLines:  30,
 			},
 		},
 		{
@@ -80,10 +76,37 @@ func TestTOMLRoundtrip(t *testing.T) {
 				t.Fatalf("Unmarshal failed: %v", err)
 			}
 
-			assertStringSliceEqual(t, "HiddenProjects", tc.cfg.HiddenProjects, got.HiddenProjects)
 			assertStringSliceEqual(t, "HiddenSessions", tc.cfg.HiddenSessions, got.HiddenSessions)
 			assertStringSliceEqual(t, "ClaudeFlags", tc.cfg.ClaudeFlags, got.ClaudeFlags)
+			if tc.cfg.AutoNameLines != got.AutoNameLines {
+				t.Errorf("AutoNameLines: want %d, got %d", tc.cfg.AutoNameLines, got.AutoNameLines)
+			}
 		})
+	}
+}
+
+func TestConfigLoadsOldFileGracefully(t *testing.T) {
+	// Simulate an old config file without auto_name_lines
+	dir := t.TempDir()
+	oldConfig := `hidden_sessions = ["abc"]
+claude_flags = ["--verbose"]
+tmux_session_name = "ccs"
+activity_lines = 5
+`
+	path := dir + "/config.toml"
+	os.WriteFile(path, []byte(oldConfig), 0644)
+
+	var cfg types.Config
+	if err := toml.Unmarshal([]byte(oldConfig), &cfg); err != nil {
+		t.Fatalf("Unmarshal old config failed: %v", err)
+	}
+	applyDefaults(&cfg)
+
+	if cfg.AutoNameLines != 20 {
+		t.Errorf("expected AutoNameLines default 20, got %d", cfg.AutoNameLines)
+	}
+	if cfg.TmuxSessionName != "ccs" {
+		t.Errorf("expected tmux_session_name 'ccs', got %q", cfg.TmuxSessionName)
 	}
 }
 

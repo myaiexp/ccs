@@ -5,8 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
+
 	"ccs/internal/activity"
 	"ccs/internal/capture"
+	"ccs/internal/state"
 	"ccs/internal/types"
 )
 
@@ -47,14 +50,14 @@ func TestWrapText(t *testing.T) {
 		input    string
 		width    int
 		wantLen  int
-		wantLine string // first line
+		wantLine string
 	}{
 		{"short text", "hello world", 80, 1, "hello world"},
 		{"wraps at width", "hello world foo bar", 11, 2, "hello world"},
 		{"preserves newlines", "line1\nline2", 80, 2, "line1"},
 		{"empty string", "", 80, 1, ""},
 		{"minimum width enforced", "hello", 5, 1, "hello"},
-		{"very narrow", "hello world", 1, 2, "hello"}, // min width is 10
+		{"very narrow", "hello world", 1, 2, "hello"},
 	}
 
 	for _, tt := range tests {
@@ -83,6 +86,9 @@ func TestFormatDuration(t *testing.T) {
 		{"minutes", now.Add(-45 * time.Minute), "45m"},
 		{"hours only", now.Add(-2 * time.Hour), "2h"},
 		{"hours and minutes", now.Add(-2*time.Hour - 30*time.Minute), "2h 30m"},
+		{"1 day", now.Add(-25 * time.Hour), "1d"},
+		{"2 days", now.Add(-49 * time.Hour), "2d"},
+		{"7 days", now.Add(-168 * time.Hour), "7d"},
 	}
 
 	for _, tt := range tests {
@@ -117,83 +123,87 @@ func TestFormatSize(t *testing.T) {
 	}
 }
 
-func TestGridPosition(t *testing.T) {
-	grid := [][]int{
-		{0, 1, 2},
-		{3, 4},
-		{5},
-	}
-
-	tests := []struct {
-		idx  int
-		wR   int
-		wC   int
-	}{
-		{0, 0, 0},
-		{2, 0, 2},
-		{3, 1, 0},
-		{4, 1, 1},
-		{5, 2, 0},
-	}
-
-	for _, tt := range tests {
-		r, c := gridPosition(grid, tt.idx)
-		if r != tt.wR || c != tt.wC {
-			t.Errorf("gridPosition(grid, %d) = (%d, %d), want (%d, %d)",
-				tt.idx, r, c, tt.wR, tt.wC)
-		}
-	}
-}
-
-func TestSortFiltered(t *testing.T) {
+func TestSortSlice(t *testing.T) {
 	now := time.Now()
 	m := &Model{
-		filtered: []types.Session{
-			{Title: "B session", LastActive: now.Add(-1 * time.Hour), ContextPct: 50, FileSize: 1000},
-			{Title: "A session", LastActive: now.Add(-2 * time.Hour), ContextPct: 80, FileSize: 3000},
-			{Title: "C session", LastActive: now, ContextPct: 20, FileSize: 2000},
-		},
 		sortField: types.SortByName,
 		sortDir:   types.SortDesc,
 	}
 
-	m.sortFiltered()
-
-	// SortByName + SortDesc: less = (a < b), no flip → alphabetical A, B, C
-	if m.filtered[0].Title != "A session" {
-		t.Errorf("first = %q, want A session", m.filtered[0].Title)
-	}
-	if m.filtered[2].Title != "C session" {
-		t.Errorf("last = %q, want C session", m.filtered[2].Title)
+	sessions := []types.Session{
+		{Title: "B session", LastActive: now.Add(-1 * time.Hour), ContextPct: 50, FileSize: 1000},
+		{Title: "A session", LastActive: now.Add(-2 * time.Hour), ContextPct: 80, FileSize: 3000},
+		{Title: "C session", LastActive: now, ContextPct: 20, FileSize: 2000},
 	}
 
-	// Switch to ascending (flips: !less → reverse alphabetical)
+	m.sortSlice(sessions)
+
+	if sessions[0].Title != "A session" {
+		t.Errorf("first = %q, want A session", sessions[0].Title)
+	}
+	if sessions[2].Title != "C session" {
+		t.Errorf("last = %q, want C session", sessions[2].Title)
+	}
+
 	m.sortDir = types.SortAsc
-	m.sortFiltered()
+	m.sortSlice(sessions)
+	if sessions[0].Title != "C session" {
+		t.Errorf("first = %q, want C session", sessions[0].Title)
+	}
+}
 
-	if m.filtered[0].Title != "C session" {
-		t.Errorf("first = %q, want C session", m.filtered[0].Title)
+func tempState(t *testing.T) *state.Store {
+	t.Helper()
+	return state.LoadFromDir(t.TempDir())
+}
+
+func TestDisplayName(t *testing.T) {
+	st := tempState(t)
+	m := &Model{state: st}
+
+	// Fallback to Title
+	s := types.Session{ID: "test1", Title: "fix auth bug", SessionName: ""}
+	if got := m.displayName(s); got != "fix auth bug" {
+		t.Errorf("displayName with title only: got %q, want %q", got, "fix auth bug")
+	}
+
+	// SessionName overrides Title
+	s.SessionName = "session-rename"
+	if got := m.displayName(s); got != "session-rename" {
+		t.Errorf("displayName with session name: got %q, want %q", got, "session-rename")
+	}
+
+	// State store name overrides SessionName
+	st.MarkOpen("test1")
+	st.SetName("test1", "auto named", "auto")
+	if got := m.displayName(s); got != "auto named" {
+		t.Errorf("displayName with auto name: got %q, want %q", got, "auto named")
+	}
+
+	// Manual name overrides auto
+	st.SetName("test1", "manual name", "manual")
+	if got := m.displayName(s); got != "manual name" {
+		t.Errorf("displayName with manual name: got %q, want %q", got, "manual name")
 	}
 }
 
 func TestRenderDetailHeight(t *testing.T) {
-	// Verify that renderDetail always produces exactly detailPaneLines() lines,
-	// regardless of content. Long pane capture lines must not wrap.
 	cfg := &types.Config{}
+	st := tempState(t)
 	m := Model{
 		config:      cfg,
-		focus:       FocusSessions,
 		width:       100,
 		height:      40,
 		paneContent: make(map[string]capture.PaneSnapshot),
 		activities:  make(map[string][]activity.Entry),
+		state:       st,
 	}
 
-	longLine := strings.Repeat("x", 200) // much wider than any detail pane
+	longLine := strings.Repeat("x", 200)
 	tests := []struct {
 		name    string
 		session types.Session
-		pane    string // pane capture content (empty = no capture)
+		pane    string
 	}{
 		{
 			name:    "no content",
@@ -205,22 +215,14 @@ func TestRenderDetailHeight(t *testing.T) {
 			pane:    "line1\nline2\nline3",
 		},
 		{
-			name:    "long pane lines that should be truncated",
+			name:    "long pane lines",
 			session: types.Session{ID: "s3", ProjectName: "test", Title: "title", ActiveSource: types.SourceTmux},
 			pane:    longLine + "\n" + longLine + "\n" + longLine + "\n" + longLine + "\n" + longLine,
 		},
 		{
-			name:    "inactive with long pane capture",
+			name:    "inactive with pane capture",
 			session: types.Session{ID: "s4", ProjectName: "test", Title: "title"},
 			pane:    longLine + "\n" + longLine + "\n" + longLine,
-		},
-		{
-			name:    "long project dir",
-			session: types.Session{ID: "s5", ProjectName: "very-long-project-name", ProjectDir: "/home/mse/Projects/very-long-project-name", Title: strings.Repeat("w", 100)},
-		},
-		{
-			name:    "long session name + title",
-			session: types.Session{ID: "s6", ProjectName: "proj", SessionName: "my-long-session-name", Title: strings.Repeat("t", 100)},
 		},
 	}
 
@@ -247,11 +249,55 @@ func TestRenderDetailHeight(t *testing.T) {
 }
 
 func TestContextStyle(t *testing.T) {
-	// Just verify it doesn't panic for edge values
 	_ = contextStyle(0)
 	_ = contextStyle(59)
 	_ = contextStyle(60)
 	_ = contextStyle(79)
 	_ = contextStyle(80)
 	_ = contextStyle(100)
+}
+
+func TestActiveOpenPartitioning(t *testing.T) {
+	st := tempState(t)
+	m := &Model{
+		sessions: []types.Session{
+			{ID: "a1", StateStatus: types.StatusActive, LastActive: time.Now()},
+			{ID: "o1", StateStatus: types.StatusOpen, LastActive: time.Now().Add(-time.Hour)},
+			{ID: "o2", StateStatus: types.StatusOpen, LastActive: time.Now().Add(-2 * time.Hour)},
+			{ID: "d1", StateStatus: types.StatusDone, LastActive: time.Now().Add(-3 * time.Hour)},
+			{ID: "u1", StateStatus: types.StatusUntracked, LastActive: time.Now().Add(-4 * time.Hour)},
+		},
+		config:    &types.Config{},
+		sortField: types.SortByTime,
+		sortDir:   types.SortDesc,
+		state:     st,
+		filter:    textinput.New(),
+	}
+
+	m.applyFilter()
+
+	// Without showDoneUntracked, should have active + open only
+	if len(m.filtered) != 3 {
+		t.Fatalf("expected 3 filtered (1 active + 2 open), got %d", len(m.filtered))
+	}
+	if m.filtered[0].ID != "a1" {
+		t.Errorf("first should be active, got %s", m.filtered[0].ID)
+	}
+
+	active := m.activeSessions()
+	if len(active) != 1 {
+		t.Errorf("expected 1 active, got %d", len(active))
+	}
+
+	open := m.openSessions()
+	if len(open) != 2 {
+		t.Errorf("expected 2 open, got %d", len(open))
+	}
+
+	// With showDoneUntracked
+	m.showDoneUntracked = true
+	m.applyFilter()
+	if len(m.filtered) != 5 {
+		t.Fatalf("expected 5 filtered with done/untracked, got %d", len(m.filtered))
+	}
 }

@@ -2,17 +2,43 @@ package project
 
 import (
 	"ccs/internal/types"
+	"os"
+	"path/filepath"
 	"sort"
 )
 
-// DiscoverProjects extracts unique projects from session data,
-// merges with config for hidden status. Sessions must already have IsActive set.
-func DiscoverProjects(sessions []types.Session, cfg *types.Config) []types.Project {
-	hiddenSet := make(map[string]bool, len(cfg.HiddenProjects))
-	for _, h := range cfg.HiddenProjects {
-		hiddenSet[h] = true
-	}
+// ProjectDir represents a project directory on disk (~/Projects/*).
+type ProjectDir struct {
+	Name string
+	Path string
+}
 
+// ScanProjectDirs scans the given root directory for project directories.
+func ScanProjectDirs(root string) []ProjectDir {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var dirs []ProjectDir
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == "." || name == ".." {
+			continue
+		}
+		dirs = append(dirs, ProjectDir{
+			Name: name,
+			Path: filepath.Join(root, name),
+		})
+	}
+	return dirs
+}
+
+// DiscoverProjects extracts unique projects from session data.
+// Sessions must already have IsActive set.
+func DiscoverProjects(sessions []types.Session) []types.Project {
 	// Collect unique projects, track most recent session per project
 	byName := make(map[string]*types.Project)
 	for _, s := range sessions {
@@ -29,7 +55,6 @@ func DiscoverProjects(sessions []types.Session, cfg *types.Config) []types.Proje
 				Dir:        s.ProjectDir,
 				LastActive: s.LastActive,
 				HasActive:  s.IsActive,
-				Hidden:     hiddenSet[s.ProjectName],
 			}
 		}
 	}

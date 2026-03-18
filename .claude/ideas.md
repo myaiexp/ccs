@@ -28,3 +28,26 @@ Possible approach:
 ## Embedded Session View (tmux popup/overlay)
 
 Hide the ccs tmux window and embed a live session view directly in the ccs TUI — follow what a session is doing without switching tabs. Could use tmux's `capture-pane` to mirror the session output into a ccs pane, or a tmux popup/overlay. Would let you monitor a session's full terminal output from within ccs without occupying a separate tab.
+
+## 2026-03-18 — Mission Control Rework Discussion
+
+### Multi-follow / tiled dashboard mode
+Discussed during brainstorming: a 2x2 (or auto-layout) grid showing live pane capture for all active sessions simultaneously. Like follow mode but for all sessions at once. Would be the ultimate "mission control" view. Deferred because single-follow + expanded active rows cover most of the need, but worth revisiting if monitoring 4+ sessions becomes common.
+
+### Session lifecycle events / activity feed
+A chronological log of cross-session events: "12:34 piclaw started", "12:36 investiq committed: Fix i18n", "12:38 ccs error in go test". Shows what happened while you were focused elsewhere. Deferred — the expanded active rows with live status partially solve this, but a timeline view would add value for longer monitoring sessions.
+
+### tmux window alert integration
+When a session needs attention (permission prompt, error, completion), set the tmux window to "alert" state so the ccs tab highlights even when not focused. Lightweight integration — just a tmux bell/activity flag. Deferred because attention states in the TUI are the first priority, but this would complement them for the "not looking at ccs" case.
+
+### Stale session nudges
+Sessions in "open" state that haven't been touched in N days get a subtle visual indicator suggesting they might be done. Not auto-completing — just a hint like dimming or a "stale?" badge. Keeps the open list honest without being aggressive. Deferred — wait to see how the manual complete workflow feels first.
+
+### CLI quick-launch mode
+`ccs piclaw` or `ccs piclaw "fix auth"` — fuzzy-match project and launch directly without opening the TUI. Not a priority (the value of ccs is monitoring, not launching faster), but would be a nice convenience layer once the core rework is done.
+
+### Frecency-sorted projects in search
+When `/` search shows project directories, sort by frecency (frequency + recency) rather than alphabetical. Projects worked on daily float to top. Low priority since search is fuzzy anyway, but would improve the "I just need to start a new session" flow.
+
+### Auto-naming prompt iteration
+The haiku naming prompt will need tuning based on real-world results. The initial prompt is task-oriented ("what is this session accomplishing?") but may need refinement. Key insight from discussion: Claude's own `/rename` grabs "interesting" details instead of the actual task — e.g., naming a config-sync setup session "bash-set-e-footgun-fix" because it latched onto a footnote. The ccs prompt must explicitly focus on the goal/task, not incidental details.

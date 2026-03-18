@@ -14,18 +14,12 @@ import (
 	"ccs/internal/activity"
 	"ccs/internal/capture"
 	"ccs/internal/config"
+	"ccs/internal/naming"
 	"ccs/internal/project"
 	"ccs/internal/session"
+	"ccs/internal/state"
 	"ccs/internal/types"
 	"ccs/internal/watcher"
-)
-
-// Focus tracks which section has focus.
-type Focus int
-
-const (
-	FocusSessions Focus = iota
-	FocusProjects
 )
 
 // Messages for launching sessions.
@@ -45,58 +39,84 @@ type PaneCaptureMsg struct {
 // PaneCaptureTickMsg triggers periodic pane capture polling.
 type PaneCaptureTickMsg struct{}
 
-type Model struct {
-	sessions     []types.Session
-	filtered     []types.Session
-	projects     []types.Project
-	filteredProj []types.Project
-	config       *types.Config
-	filter       textinput.Model
-	focus        Focus
-	sessionIdx   int
-	projectIdx   int
-	filtering    bool
-	showHidden   bool
-	showHelp     bool
-	showPrefs    bool
-	prefsIdx     int
-	confirming   bool
-	confirmSess  *types.Session
-	width        int
-	height       int
-	errMsg       string
-	pendingG     bool // true when 'g' was pressed, waiting for second 'g'
-	sortField    types.SortField
-	sortDir      types.SortDir
-	tracker      *session.Tracker
-	watcher      *watcher.Watcher
-	activities   map[string][]activity.Entry    // sessionID -> recent entries
-	followID    string                         // session ID being followed (empty = normal)
-	paneContent map[string]capture.PaneSnapshot // sessionID -> latest snapshot
-	projectsDir string                         // ~/.claude/projects path
+// AutoNameMsg delivers the result of an auto-naming attempt.
+type AutoNameMsg struct {
+	SessionID string
+	Name      string
+	Err       error
 }
 
-func New(sessions []types.Session, projects []types.Project, cfg *types.Config, tracker *session.Tracker, w *watcher.Watcher, projectsDir string) Model {
+// AutoNameTriggerMsg triggers naming for a session after a delay.
+type AutoNameTriggerMsg struct {
+	SessionID string
+}
+
+// SearchResult is a union type for search results: either a session or a project directory.
+type SearchResult struct {
+	Session *types.Session // nil for project dir results
+	DirPath string         // for project dirs
+	DirName string         // display name
+}
+
+type Model struct {
+	sessions          []types.Session
+	filtered          []types.Session // active + open (+ done/untracked when visible)
+	config            *types.Config
+	filter            textinput.Model
+	sessionIdx        int
+	filtering         bool
+	showDoneUntracked bool
+	showHelp          bool
+	showPrefs         bool
+	prefsIdx          int
+	confirming        bool
+	confirmSess       *types.Session
+	renaming          bool
+	renameInput       textinput.Model
+	renameTarget      string // session ID being renamed
+	width             int
+	height            int
+	errMsg            string
+	pendingG          bool // true when 'g' was pressed, waiting for second 'g'
+	sortField         types.SortField
+	sortDir           types.SortDir
+	tracker           *session.Tracker
+	state             *state.Store
+	watcher           *watcher.Watcher
+	activities        map[string][]activity.Entry    // sessionID -> recent entries
+	followID          string                         // session ID being followed (empty = normal)
+	paneContent       map[string]capture.PaneSnapshot // sessionID -> latest snapshot
+	projectsDir       string                         // ~/.claude/projects path
+	projectsRoot      string                         // ~/Projects/ path
+	projectDirs       []project.ProjectDir           // scanned project dirs
+	searchResults     []SearchResult                 // populated when filtering
+	searchIdx         int                            // index into searchResults
+	prevActiveIDs     map[string]bool                // previous refresh active set (for transition detection)
+}
+
+func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, st *state.Store, w *watcher.Watcher, projectsDir string, projectsRoot string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
 
 	m := Model{
-		sessions:     sessions,
-		projects:     projects,
-		filteredProj: filterVisibleProjects(projects, false),
-		config:       cfg,
-		filter:       ti,
-		focus:        FocusSessions,
-		sortField:    types.SortByTime,
-		sortDir:      types.SortDesc,
-		tracker:      tracker,
-		watcher:      w,
-		activities:   make(map[string][]activity.Entry),
-		paneContent:  make(map[string]capture.PaneSnapshot),
-		projectsDir:  projectsDir,
+		sessions:      sessions,
+		config:        cfg,
+		filter:        ti,
+		sortField:     types.SortByTime,
+		sortDir:       types.SortDesc,
+		tracker:       tracker,
+		state:         st,
+		watcher:       w,
+		activities:    make(map[string][]activity.Entry),
+		paneContent:   make(map[string]capture.PaneSnapshot),
+		projectsDir:   projectsDir,
+		projectsRoot:  projectsRoot,
+		projectDirs:   project.ScanProjectDirs(projectsRoot),
+		prevActiveIDs: make(map[string]bool),
 	}
+	_ = computeStateStatuses(m.sessions, m.tracker, m.state)
 	m.applyFilter()
 
 	return m
@@ -154,7 +174,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PaneCaptureTickMsg:
 		var cmds []tea.Cmd
-		// Capture all sessions that have tmux windows (active or not)
 		captured := make(map[string]bool)
 		tmuxWindows := m.tracker.TmuxWindowIDs()
 		for sessID := range tmuxWindows {
@@ -163,15 +182,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				captured[sessID] = true
 			}
 		}
-		// Also capture followed session if not already covered
 		if m.followID != "" && !captured[m.followID] {
 			if cmd := m.captureCmdForSession(m.followID); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
-		// Always re-subscribe
 		cmds = append(cmds, paneCaptureTickCmd())
 		return m, tea.Batch(cmds...)
+
+	case AutoNameMsg:
+		if msg.Name != "" {
+			m.state.SetName(msg.SessionID, msg.Name, "auto")
+		}
+		return m, nil
+
+	case AutoNameTriggerMsg:
+		content := m.namingContent(msg.SessionID)
+		if content != "" {
+			return m, autoNameCmd(msg.SessionID, content, m.config.AutoNameLines)
+		}
+		return m, nil
 
 	case TickMsg:
 		cmd := m.handleRefresh()
@@ -198,12 +228,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// ctrl+c always quits
 	if key == "ctrl+c" {
 		return m, tea.Quit
 	}
 
-	// Clear any error message on keypress
 	m.errMsg = ""
 
 	// When filtering, most keys go to the text input
@@ -216,11 +244,60 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.applyFilter()
 			return m, nil
 		case "enter":
+			if len(m.searchResults) > 0 && m.searchIdx < len(m.searchResults) {
+				r := m.searchResults[m.searchIdx]
+				m.filtering = false
+				m.filter.Blur()
+				m.filter.SetValue("")
+				m.applyFilter()
+				if r.Session != nil {
+					// Session → switch or resume
+					tmuxWindows := m.tracker.TmuxWindowIDs()
+					if wid, ok := tmuxWindows[r.Session.ID]; ok {
+						return m, TmuxSwitch(wid)
+					}
+					return m, TmuxLaunchResume(*r.Session, m.config.ClaudeFlags, m.tracker)
+				}
+				// Project dir → launch new session
+				return m, TmuxLaunchNew(r.DirPath, r.DirName, m.config.ClaudeFlags, m.tracker)
+			}
 			m.filtering = false
 			m.filter.Blur()
 			return m, nil
-		case "up", "down", "tab":
-			return m.handleNavigation(key)
+		case "up":
+			if m.searchIdx > 0 {
+				m.searchIdx--
+			}
+			return m, nil
+		case "down":
+			if m.searchIdx < len(m.searchResults)-1 {
+				m.searchIdx++
+			}
+			return m, nil
+		case "c":
+			// Complete in search mode
+			if m.searchIdx < len(m.searchResults) {
+				r := m.searchResults[m.searchIdx]
+				if r.Session != nil {
+					if r.Session.StateStatus == types.StatusActive {
+						m.errMsg = "Session still running — complete after it ends"
+					} else if r.Session.StateStatus != types.StatusDone {
+						m.state.MarkDone(r.Session.ID)
+						m.applyFilter()
+					}
+				}
+			}
+			return m, nil
+		case "o":
+			// Reopen in search mode
+			if m.searchIdx < len(m.searchResults) {
+				r := m.searchResults[m.searchIdx]
+				if r.Session != nil && r.Session.StateStatus == types.StatusDone {
+					m.state.Reopen(r.Session.ID)
+					m.applyFilter()
+				}
+			}
+			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.filter, cmd = m.filter.Update(msg)
@@ -229,13 +306,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Help overlay
 	if m.showHelp {
 		m.showHelp = false
 		return m, nil
 	}
 
-	// Preferences overlay
 	if m.showPrefs {
 		const prefsCount = 3
 		switch key {
@@ -249,18 +324,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "enter", " ":
 			switch m.prefsIdx {
-			case 0: // relative numbers
+			case 0:
 				m.config.RelativeNumbers = !m.config.RelativeNumbers
 				if err := config.Save(m.config); err != nil {
 					m.errMsg = fmt.Sprintf("Config save error: %v", err)
 				}
-			case 1: // activity lines cycle
+			case 1:
 				m.config.ActivityLines = cycleValue(m.config.ActivityLines, []int{3, 5, 10, 15})
 				if err := config.Save(m.config); err != nil {
 					m.errMsg = fmt.Sprintf("Config save error: %v", err)
 				}
-			case 2: // name length cycle
-				m.config.ProjectNameMax = cycleValue(m.config.ProjectNameMax, []int{12, 16, 20, 24, 30})
+			case 2:
+				m.config.AutoNameLines = cycleValue(m.config.AutoNameLines, []int{10, 20, 30, 50})
 				if err := config.Save(m.config); err != nil {
 					m.errMsg = fmt.Sprintf("Config save error: %v", err)
 				}
@@ -271,7 +346,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Delete confirmation
 	if m.confirming {
 		switch key {
 		case "y":
@@ -283,6 +357,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if err := os.RemoveAll(subagentsDir); err != nil {
 					m.errMsg = fmt.Sprintf("Delete error: %v", err)
 				}
+				m.state.Remove(m.confirmSess.ID)
 				m.confirming = false
 				m.confirmSess = nil
 				return m, refreshCmd()
@@ -294,21 +369,37 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Handle pending 'g' for gg (go to top)
+	// Rename mode
+	if m.renaming {
+		switch key {
+		case "enter":
+			value := strings.TrimSpace(m.renameInput.Value())
+			if value != "" {
+				m.state.SetName(m.renameTarget, value, "manual")
+			}
+			m.renaming = false
+			m.renameTarget = ""
+			return m, nil
+		case "esc":
+			m.renaming = false
+			m.renameTarget = ""
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.renameInput, cmd = m.renameInput.Update(msg)
+			return m, cmd
+		}
+	}
+
 	if m.pendingG {
 		m.pendingG = false
 		if key == "g" {
-			if m.focus == FocusSessions {
-				m.sessionIdx = 0
-			} else {
-				m.projectIdx = 0
-			}
+			m.sessionIdx = 0
 			return m, nil
 		}
-		// Not 'g' — fall through to normal key handling
 	}
 
-	// Number shortcuts: 1-9 launch the Nth session in the sorted list.
+	// Number shortcuts: 1-9 for the Nth visible session (active + open combined)
 	if key >= "1" && key <= "9" {
 		n := int(key[0] - '0')
 		idx := n - 1
@@ -332,9 +423,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter.Focus()
 		return m, textinput.Blink
 
-	case "tab":
-		return m.handleNavigation(key)
-
 	case "up", "k":
 		return m.handleNavigation("up")
 
@@ -342,10 +430,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleNavigation("down")
 
 	case "G":
-		if m.focus == FocusSessions && len(m.filtered) > 0 {
+		if len(m.filtered) > 0 {
 			m.sessionIdx = len(m.filtered) - 1
-		} else if m.focus == FocusProjects && len(m.filteredProj) > 0 {
-			m.projectIdx = len(m.filteredProj) - 1
 		}
 		return m, nil
 
@@ -353,21 +439,49 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingG = true
 		return m, nil
 
-	case "left":
-		return m.handleNavigation("left")
-
-	case "right":
-		return m.handleNavigation("right")
-
 	case "enter":
 		return m.handleEnter()
 
-	case "n":
-		m.focus = FocusProjects
+	case "c":
+		if len(m.filtered) > 0 {
+			sess := m.filtered[m.sessionIdx]
+			if sess.StateStatus == types.StatusActive {
+				m.errMsg = "Session still running — complete after it ends"
+			} else if sess.StateStatus != types.StatusDone {
+				m.state.MarkDone(sess.ID)
+				m.applyFilter()
+			}
+		}
+		return m, nil
+
+	case "o":
+		if len(m.filtered) > 0 {
+			sess := m.filtered[m.sessionIdx]
+			if sess.StateStatus == types.StatusDone {
+				m.state.Reopen(sess.ID)
+				m.applyFilter()
+			}
+		}
+		return m, nil
+
+	case "R":
+		if len(m.filtered) > 0 {
+			sess := m.filtered[m.sessionIdx]
+			ri := textinput.New()
+			ri.Placeholder = "session name..."
+			ri.Prompt = "Rename: "
+			ri.CharLimit = 64
+			ri.SetValue(m.displayName(sess))
+			ri.Focus()
+			m.renameInput = ri
+			m.renameTarget = sess.ID
+			m.renaming = true
+			return m, textinput.Blink
+		}
 		return m, nil
 
 	case "d":
-		if m.focus == FocusSessions && len(m.filtered) > 0 {
+		if len(m.filtered) > 0 {
 			sess := m.filtered[m.sessionIdx]
 			m.confirming = true
 			m.confirmSess = &sess
@@ -386,12 +500,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		return m, nil
 
-	case "x":
-		m.toggleHideSession()
-		return m, nil
-
 	case "h":
-		m.showHidden = !m.showHidden
+		m.showDoneUntracked = !m.showDoneUntracked
 		m.applyFilter()
 		return m, nil
 
@@ -406,6 +516,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "f":
 		return m.handleFollow()
+
+	case "N":
+		if len(m.filtered) > 0 {
+			sess := m.filtered[m.sessionIdx]
+			content := m.namingContent(sess.ID)
+			if content != "" {
+				return m, autoNameCmd(sess.ID, content, m.config.AutoNameLines)
+			}
+		}
+		return m, nil
 
 	case "esc":
 		if m.followID != "" {
@@ -424,103 +544,43 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 	switch key {
-	case "tab":
-		if m.focus == FocusSessions {
-			m.focus = FocusProjects
-			if m.projectIdx >= len(m.filteredProj) {
-				m.projectIdx = 0
-			}
-		} else {
-			m.focus = FocusSessions
-			if m.sessionIdx >= len(m.filtered) {
-				m.sessionIdx = 0
-			}
-		}
-
 	case "up":
-		if m.focus == FocusSessions {
-			if m.sessionIdx > 0 {
-				m.sessionIdx--
-			}
-		} else {
-			grid := m.projectGrid()
-			r, c := gridPosition(grid, m.projectIdx)
-			if r > 0 {
-				targetRow := grid[r-1]
-				if c < len(targetRow) {
-					m.projectIdx = targetRow[c]
-				} else {
-					m.projectIdx = targetRow[len(targetRow)-1]
-				}
-			}
+		if m.sessionIdx > 0 {
+			m.sessionIdx--
 		}
-
 	case "down":
-		if m.focus == FocusSessions {
-			if m.sessionIdx < len(m.filtered)-1 {
-				m.sessionIdx++
-			}
-		} else {
-			grid := m.projectGrid()
-			r, c := gridPosition(grid, m.projectIdx)
-			if r < len(grid)-1 {
-				targetRow := grid[r+1]
-				if c < len(targetRow) {
-					m.projectIdx = targetRow[c]
-				} else {
-					m.projectIdx = targetRow[len(targetRow)-1]
-				}
-			}
-		}
-
-	case "left":
-		if m.focus == FocusProjects {
-			if m.projectIdx > 0 {
-				m.projectIdx--
-			}
-		}
-
-	case "right":
-		if m.focus == FocusProjects {
-			if m.projectIdx < len(m.filteredProj)-1 {
-				m.projectIdx++
-			}
+		if m.sessionIdx < len(m.filtered)-1 {
+			m.sessionIdx++
 		}
 	}
 	return m, nil
 }
 
 func (m Model) handleEnter() (Model, tea.Cmd) {
-	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		sess := m.filtered[m.sessionIdx]
-		// Check if session has a tmux window — switch to it
-		tmuxWindows := m.tracker.TmuxWindowIDs()
-		if wid, ok := tmuxWindows[sess.ID]; ok {
-			return m, TmuxSwitch(wid)
-		}
-		// Launch in new tmux window
-		return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
+	if len(m.filtered) == 0 {
+		return m, nil
 	}
-	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
-		proj := m.filteredProj[m.projectIdx]
-		return m, TmuxLaunchNew(proj, m.config.ClaudeFlags, m.tracker)
+	sess := m.filtered[m.sessionIdx]
+	// Active sessions with tmux windows → switch
+	tmuxWindows := m.tracker.TmuxWindowIDs()
+	if wid, ok := tmuxWindows[sess.ID]; ok {
+		return m, TmuxSwitch(wid)
 	}
-	return m, nil
+	// All others → resume in new tmux window
+	return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
 }
 
 func (m Model) handleFollow() (Model, tea.Cmd) {
-	if m.focus != FocusSessions || len(m.filtered) == 0 {
+	if len(m.filtered) == 0 {
 		return m, nil
 	}
 	sess := m.filtered[m.sessionIdx]
 
-	// Toggle off if already following this session
 	if m.followID == sess.ID {
 		m.followID = ""
 		return m, nil
 	}
 
-	// Only follow SourceTmux sessions
 	if sess.ActiveSource != types.SourceTmux {
 		m.errMsg = "Can only follow sessions with tmux windows"
 		return m, nil
@@ -530,34 +590,7 @@ func (m Model) handleFollow() (Model, tea.Cmd) {
 	return m, m.captureCmdForSession(sess.ID)
 }
 
-func (m *Model) toggleHideSession() {
-	if m.focus != FocusSessions || len(m.filtered) == 0 {
-		return
-	}
-	sess := m.filtered[m.sessionIdx]
-
-	// Toggle hidden status
-	found := false
-	var newHidden []string
-	for _, id := range m.config.HiddenSessions {
-		if id == sess.ID {
-			found = true
-			continue // remove it
-		}
-		newHidden = append(newHidden, id)
-	}
-	if !found {
-		newHidden = append(newHidden, sess.ID)
-	}
-	m.config.HiddenSessions = newHidden
-	if err := config.Save(m.config); err != nil {
-		m.errMsg = fmt.Sprintf("Config save error: %v", err)
-	}
-	m.applyFilter()
-}
-
 func (m *Model) applyFilter() {
-	// Remember selected session ID to restore after re-sort
 	var selectedID string
 	if m.sessionIdx < len(m.filtered) {
 		selectedID = m.filtered[m.sessionIdx].ID
@@ -570,89 +603,102 @@ func (m *Model) applyFilter() {
 		hiddenSet[id] = true
 	}
 
-	if query == "" {
-		if m.showHidden {
-			m.filtered = m.sessions
-		} else {
-			m.filtered = nil
-			for _, s := range m.sessions {
-				if !hiddenSet[s.ID] {
-					m.filtered = append(m.filtered, s)
-				}
+	// Filter out hidden sessions
+	var source []types.Session
+	for _, s := range m.sessions {
+		if !hiddenSet[s.ID] {
+			source = append(source, s)
+		}
+	}
+
+	if query != "" {
+		// Fuzzy search all sessions + project dirs → searchResults
+		m.searchResults = nil
+
+		// Match sessions
+		sessTargets := make([]string, len(source))
+		for i, s := range source {
+			sessTargets[i] = s.ProjectName + " " + m.displayName(s) + " " + s.Title
+		}
+		sessMatches := fuzzy.Find(query, sessTargets)
+		for _, match := range sessMatches {
+			s := source[match.Index]
+			m.searchResults = append(m.searchResults, SearchResult{Session: &s})
+		}
+
+		// Match project dirs
+		dirTargets := make([]string, len(m.projectDirs))
+		for i, d := range m.projectDirs {
+			dirTargets[i] = d.Name
+		}
+		dirMatches := fuzzy.Find(query, dirTargets)
+		for _, match := range dirMatches {
+			d := m.projectDirs[match.Index]
+			m.searchResults = append(m.searchResults, SearchResult{DirPath: d.Path, DirName: d.Name})
+		}
+
+		// Also build filtered for compatibility (session results only)
+		m.filtered = nil
+		for _, r := range m.searchResults {
+			if r.Session != nil {
+				m.filtered = append(m.filtered, *r.Session)
 			}
 		}
-		m.filteredProj = filterVisibleProjects(m.projects, m.showHidden)
-		m.sortFiltered()
+		if m.searchIdx >= len(m.searchResults) {
+			m.searchIdx = max(0, len(m.searchResults)-1)
+		}
 		m.restoreSelection(selectedID)
 		return
 	}
 
-	// Build source list (respecting hidden)
-	var source []types.Session
-	if m.showHidden {
-		source = m.sessions
-	} else {
-		for _, s := range m.sessions {
-			if !hiddenSet[s.ID] {
-				source = append(source, s)
-			}
+	m.searchResults = nil
+
+	// Partition sessions by state: active first, then open, then done/untracked
+	var active, open, rest []types.Session
+	for _, s := range source {
+		switch s.StateStatus {
+		case types.StatusActive:
+			active = append(active, s)
+		case types.StatusOpen:
+			open = append(open, s)
+		default:
+			rest = append(rest, s)
 		}
 	}
 
-	// Fuzzy filter sessions
-	targets := make([]string, len(source))
-	for i, s := range source {
-		targets[i] = s.ProjectName + " " + s.SessionName + " " + s.Title
-	}
-	matches := fuzzy.Find(query, targets)
-	m.filtered = make([]types.Session, len(matches))
-	for i, match := range matches {
-		m.filtered[i] = source[match.Index]
+	// Active: always sorted by last active (most recent first)
+	sort.SliceStable(active, func(i, j int) bool {
+		return active[i].LastActive.After(active[j].LastActive)
+	})
+
+	// Open: sorted by user's sort choice
+	m.sortSlice(open)
+
+	// Done/untracked: sorted same as open
+	m.sortSlice(rest)
+
+	m.filtered = nil
+	m.filtered = append(m.filtered, active...)
+	m.filtered = append(m.filtered, open...)
+	if m.showDoneUntracked {
+		m.filtered = append(m.filtered, rest...)
 	}
 
-	// Fuzzy filter projects
-	visible := filterVisibleProjects(m.projects, m.showHidden)
-	projTargets := make([]string, len(visible))
-	for i, p := range visible {
-		projTargets[i] = p.Name
-	}
-	projMatches := fuzzy.Find(query, projTargets)
-	m.filteredProj = make([]types.Project, len(projMatches))
-	for i, match := range projMatches {
-		m.filteredProj[i] = visible[match.Index]
-	}
-
-	m.sortFiltered()
 	m.restoreSelection(selectedID)
 }
 
-// restoreSelection finds the session with the given ID in the filtered list
-// and sets sessionIdx to it. Falls back to clamping if not found.
-func (m *Model) restoreSelection(id string) {
-	if id != "" {
-		for i, s := range m.filtered {
-			if s.ID == id {
-				m.sessionIdx = i
-				m.clampIndices()
-				return
-			}
-		}
-	}
-	m.clampIndices()
-}
-
-func (m *Model) sortFiltered() {
-	sort.SliceStable(m.filtered, func(i, j int) bool {
+func (m *Model) sortSlice(sessions []types.Session) {
+	sort.SliceStable(sessions, func(i, j int) bool {
 		var less bool
 		switch m.sortField {
 		case types.SortByTime:
-			less = m.filtered[i].LastActive.After(m.filtered[j].LastActive)
+			less = sessions[i].LastActive.After(sessions[j].LastActive)
 		case types.SortByContext:
-			less = m.filtered[i].ContextPct > m.filtered[j].ContextPct
+			less = sessions[i].ContextPct > sessions[j].ContextPct
 		case types.SortBySize:
-			less = m.filtered[i].FileSize > m.filtered[j].FileSize
+			less = sessions[i].FileSize > sessions[j].FileSize
 		case types.SortByName:
-			less = strings.ToLower(m.filtered[i].Title) < strings.ToLower(m.filtered[j].Title)
+			less = strings.ToLower(sessions[i].Title) < strings.ToLower(sessions[j].Title)
 		}
 		if m.sortDir == types.SortAsc {
 			less = !less
@@ -661,162 +707,142 @@ func (m *Model) sortFiltered() {
 	})
 }
 
-func (m *Model) clampIndices() {
+func (m *Model) restoreSelection(id string) {
+	if id != "" {
+		for i, s := range m.filtered {
+			if s.ID == id {
+				m.sessionIdx = i
+				m.clampIndex()
+				return
+			}
+		}
+	}
+	m.clampIndex()
+}
+
+func (m *Model) clampIndex() {
 	if m.sessionIdx >= len(m.filtered) {
 		m.sessionIdx = max(0, len(m.filtered)-1)
 	}
-	if m.projectIdx >= len(m.filteredProj) {
-		m.projectIdx = max(0, len(m.filteredProj)-1)
-	}
 }
 
-// scrollWindow returns the start and end indices for the visible session window.
+// activeSessions returns the active sessions from the filtered list.
+func (m *Model) activeSessions() []types.Session {
+	var result []types.Session
+	for _, s := range m.filtered {
+		if s.StateStatus == types.StatusActive {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// openSessions returns the open sessions from the filtered list.
+func (m *Model) openSessions() []types.Session {
+	var result []types.Session
+	for _, s := range m.filtered {
+		if s.StateStatus == types.StatusOpen {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// doneCount returns the number of done sessions in the full session list.
+func (m *Model) doneCount() int {
+	count := 0
+	for _, s := range m.sessions {
+		if s.StateStatus == types.StatusDone {
+			count++
+		}
+	}
+	return count
+}
+
+// displayName returns the best available name for a session using the fallback chain:
+// manual name > auto name > session name > title
+func (m *Model) displayName(s types.Session) string {
+	if ss, ok := m.state.Get(s.ID); ok && ss.Name != "" {
+		return ss.Name
+	}
+	if s.SessionName != "" {
+		return s.SessionName
+	}
+	return s.Title
+}
+
+// activeRowLines returns how many lines an active row takes.
+func (m *Model) activeRowLines(s types.Session) int {
+	lines := 1 // header line
+	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+		// Show 1-2 lines of pane capture
+		paneLines := strings.Split(snap.Content, "\n")
+		n := 2
+		if len(paneLines) < n {
+			n = len(paneLines)
+		}
+		lines += n
+	}
+	return lines
+}
+
+// scrollWindow returns the start and end indices for the visible open session window.
+// Active sessions are always fully visible — this handles open session scrolling.
 func (m *Model) scrollWindow() (int, int) {
-	showDetail := m.focus == FocusSessions && len(m.filtered) > 0
-	projGridRows := len(m.projectGrid())
-	if projGridRows == 0 {
-		projGridRows = 1
+	active := m.activeSessions()
+	openList := m.openSessions()
+	nActive := len(active)
+	nOpen := len(openList)
+
+	if nOpen == 0 {
+		return 0, 0
 	}
-	fixedOverhead := 8 + projGridRows
+
+	// Calculate space used by active section
+	activeLines := 0
+	for _, s := range active {
+		activeLines += m.activeRowLines(s)
+	}
+	if nActive > 0 {
+		activeLines += 2 // ACTIVE header + blank
+	}
+
+	// Fixed overhead: outer border(2) + title(1) + open header(1) + footer(2)
+	fixedOverhead := 6 + activeLines
+
+	showDetail := m.sessionIdx >= nActive && nOpen > 0
 	if showDetail {
-		// -1 because the detail pane replaces one of the maxRows session slots
-		fixedOverhead += m.detailPaneLines() - 1
+		fixedOverhead += m.detailPaneLines()
 	}
-	availHeight := m.height - 2
-	maxRows := availHeight - fixedOverhead
+
+	availHeight := m.height - fixedOverhead
+	maxRows := availHeight
 	if maxRows < 3 {
 		maxRows = 3
 	}
-	if maxRows > len(m.filtered) {
-		maxRows = len(m.filtered)
+	if maxRows > nOpen {
+		maxRows = nOpen
+	}
+
+	// sessionIdx relative to open section
+	openIdx := m.sessionIdx - nActive
+	if openIdx < 0 {
+		openIdx = 0
 	}
 
 	half := maxRows / 2
-	start := m.sessionIdx - half
+	start := openIdx - half
 	if start < 0 {
 		start = 0
 	}
-	if start > len(m.filtered)-maxRows {
-		start = max(0, len(m.filtered)-maxRows)
+	if start > nOpen-maxRows {
+		start = max(0, nOpen-maxRows)
 	}
 	end := start + maxRows
-	if end > len(m.filtered) {
-		end = len(m.filtered)
+	if end > nOpen {
+		end = nOpen
 	}
 	return start, end
-}
-
-
-func filterVisibleProjects(projects []types.Project, showHidden bool) []types.Project {
-	if showHidden {
-		return projects
-	}
-	var visible []types.Project
-	for _, p := range projects {
-		if !p.Hidden {
-			visible = append(visible, p)
-		}
-	}
-	return visible
-}
-
-// gridLayout holds the computed layout of the project grid.
-type gridLayout struct {
-	names     []string // truncated display names
-	cols      int      // number of columns
-	rows      int      // number of rows
-	colWidths []int    // width of each column
-	grid      [][]int  // rows of item indices
-}
-
-// computeGridLayout computes the columnar layout for the project grid.
-// Used by both projectGrid (for navigation) and renderProjects (for rendering).
-func (m *Model) computeGridLayout() *gridLayout {
-	if len(m.filteredProj) == 0 {
-		return nil
-	}
-
-	maxWidth := m.width - 4
-	if maxWidth < 40 {
-		maxWidth = 40
-	}
-	nameMax := m.config.ProjectNameMax
-	gap := 2
-	n := len(m.filteredProj)
-
-	names := make([]string, n)
-	for i, p := range m.filteredProj {
-		names[i] = truncateName(p.Name, nameMax)
-	}
-
-	bestCols := 1
-	for cols := n; cols >= 1; cols-- {
-		rows := (n + cols - 1) / cols
-		totalWidth := 0
-		for c := 0; c < cols; c++ {
-			colMax := 0
-			for r := 0; r < rows; r++ {
-				idx := r*cols + c
-				if idx < n && len(names[idx]) > colMax {
-					colMax = len(names[idx])
-				}
-			}
-			totalWidth += colMax
-			if c < cols-1 {
-				totalWidth += gap
-			}
-		}
-		if totalWidth <= maxWidth {
-			bestCols = cols
-			break
-		}
-	}
-
-	rows := (n + bestCols - 1) / bestCols
-	colWidths := make([]int, bestCols)
-	for c := 0; c < bestCols; c++ {
-		for r := 0; r < rows; r++ {
-			idx := r*bestCols + c
-			if idx < n && len(names[idx]) > colWidths[c] {
-				colWidths[c] = len(names[idx])
-			}
-		}
-	}
-
-	var grid [][]int
-	for r := 0; r < rows; r++ {
-		var row []int
-		for c := 0; c < bestCols; c++ {
-			idx := r*bestCols + c
-			if idx < n {
-				row = append(row, idx)
-			}
-		}
-		grid = append(grid, row)
-	}
-
-	return &gridLayout{names: names, cols: bestCols, rows: rows, colWidths: colWidths, grid: grid}
-}
-
-// projectGrid returns the grid indices for keyboard navigation.
-func (m *Model) projectGrid() [][]int {
-	gl := m.computeGridLayout()
-	if gl == nil {
-		return nil
-	}
-	return gl.grid
-}
-
-// gridPosition returns (row, col) for a given item index in the grid.
-func gridPosition(grid [][]int, idx int) (int, int) {
-	for r, row := range grid {
-		for c, itemIdx := range row {
-			if itemIdx == idx {
-				return r, c
-			}
-		}
-	}
-	return 0, 0
 }
 
 func (m *Model) activityLines() int {
@@ -826,17 +852,60 @@ func (m *Model) activityLines() int {
 	return 5
 }
 
-// detailPaneLines returns a fixed height for the detail pane so that the
-// session list doesn't jump around when switching between sessions with
-// different amounts of content. Always reserves space for the content section
-// (pane capture or activity entries).
-// Layout: header(1) + info(1) + blank(1) + status(1) + blank(1) + content(N) + border(2)
+// detailPaneLines returns a fixed height for the detail pane.
 func (m *Model) detailPaneLines() int {
-	if m.focus != FocusSessions || len(m.filtered) == 0 {
+	if len(m.filtered) == 0 {
 		return 0
 	}
-	// 7 = header(1) + info(1) + blank(1) + status(1) + blank(1) + border(2)
 	return 7 + m.activityLines()
+}
+
+// computeStateStatuses sets StateStatus on each session by merging tracker and state store.
+// Returns IDs of sessions that were just promoted to open.
+func computeStateStatuses(sessions []types.Session, tracker *session.Tracker, st *state.Store) []string {
+	openIDs := tracker.OpenSessionIDs()
+	var promoted []string
+	for i := range sessions {
+		id := sessions[i].ID
+		if openIDs[id] {
+			sessions[i].StateStatus = types.StatusActive
+			if !st.Has(id) {
+				st.MarkOpen(id)
+				promoted = append(promoted, id)
+			}
+		} else if ss, ok := st.Get(id); ok {
+			switch ss.Status {
+			case "open":
+				sessions[i].StateStatus = types.StatusOpen
+			case "done":
+				sessions[i].StateStatus = types.StatusDone
+			default:
+				sessions[i].StateStatus = types.StatusUntracked
+			}
+		} else {
+			sessions[i].StateStatus = types.StatusUntracked
+		}
+	}
+	return promoted
+}
+
+func autoNameCmd(sessionID, content string, maxLines int) tea.Cmd {
+	return func() tea.Msg {
+		result := naming.GenerateName(sessionID, content, maxLines)
+		return AutoNameMsg{SessionID: result.SessionID, Name: result.Name, Err: result.Err}
+	}
+}
+
+func (m *Model) namingContent(sessionID string) string {
+	if snap, ok := m.paneContent[sessionID]; ok && snap.Content != "" {
+		return snap.Content
+	}
+	for _, s := range m.sessions {
+		if s.ID == sessionID && s.FilePath != "" {
+			return naming.TailFileLines(s.FilePath, m.config.AutoNameLines)
+		}
+	}
+	return ""
 }
 
 func refreshCmd() tea.Cmd {
@@ -871,31 +940,55 @@ func (m *Model) handleRefresh() tea.Cmd {
 		return nil
 	}
 
-	// Refresh tracker: prune dead PIDs, seed from /proc
 	m.tracker.Refresh()
 	m.tracker.MatchNewSession(sessions)
-
 	m.tracker.MarkActive(sessions)
+
+	justPromoted := computeStateStatuses(sessions, m.tracker, m.state)
+
+	newActiveIDs := make(map[string]bool)
+	for _, s := range sessions {
+		if s.StateStatus == types.StatusActive {
+			newActiveIDs[s.ID] = true
+		}
+	}
+
+	var namingCmds []tea.Cmd
+
+	// Sessions that just went inactive → immediate naming
+	for id := range m.prevActiveIDs {
+		if !newActiveIDs[id] {
+			content := m.namingContent(id)
+			if content != "" {
+				namingCmds = append(namingCmds, autoNameCmd(id, content, m.config.AutoNameLines))
+			}
+		}
+	}
+
+	// Newly promoted sessions → delayed naming (30s)
+	for _, id := range justPromoted {
+		sid := id
+		namingCmds = append(namingCmds, tea.Tick(30*time.Second, func(time.Time) tea.Msg {
+			return AutoNameTriggerMsg{SessionID: sid}
+		}))
+	}
+
+	m.prevActiveIDs = newActiveIDs
 
 	// Diff active sessions to update watcher
 	if m.watcher != nil {
-		// Build new active set
-		newActive := make(map[string]string) // sessionID → filePath
+		newActive := make(map[string]string)
 		for _, s := range sessions {
 			if s.IsActive && s.FilePath != "" {
 				newActive[s.ID] = s.FilePath
 			}
 		}
-
-		// Build old active set
 		oldActive := make(map[string]string)
 		for _, s := range m.sessions {
 			if s.IsActive && s.FilePath != "" {
 				oldActive[s.ID] = s.FilePath
 			}
 		}
-
-		// Watch newly-active, unwatch newly-inactive
 		for id, path := range newActive {
 			if _, was := oldActive[id]; !was {
 				_ = m.watcher.Watch(id, path)
@@ -909,12 +1002,15 @@ func (m *Model) handleRefresh() tea.Cmd {
 	}
 
 	m.sessions = sessions
-	m.projects = project.DiscoverProjects(sessions, m.config)
+	m.projectDirs = project.ScanProjectDirs(m.projectsRoot)
 	m.applyFilter()
+
+	if len(namingCmds) > 0 {
+		return tea.Batch(namingCmds...)
+	}
 	return nil
 }
 
-// paneCaptureCmd creates a tea.Cmd that captures pane content for a session.
 func paneCaptureCmd(sessionID, windowID string, lines int) tea.Cmd {
 	return func() tea.Msg {
 		snap, err := capture.CapturePane(sessionID, windowID, lines)
@@ -922,15 +1018,12 @@ func paneCaptureCmd(sessionID, windowID string, lines int) tea.Cmd {
 	}
 }
 
-// paneCaptureTickCmd fires a PaneCaptureTickMsg after 1 second.
 func paneCaptureTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {
 		return PaneCaptureTickMsg{}
 	})
 }
 
-// captureCmdForSession returns a paneCaptureCmd for the given session ID,
-// looking up the tmux window ID from the tracker. Returns nil if not found.
 func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
 	tmuxWindows := m.tracker.TmuxWindowIDs()
 	wid, ok := tmuxWindows[sessionID]
@@ -940,7 +1033,6 @@ func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
 	return paneCaptureCmd(sessionID, wid, 30)
 }
 
-// cycleValue advances current to the next value in the cycle, wrapping to the first.
 func cycleValue(current int, values []int) int {
 	for i, v := range values {
 		if v == current {
@@ -949,4 +1041,3 @@ func cycleValue(current int, values []int) int {
 	}
 	return values[0]
 }
-

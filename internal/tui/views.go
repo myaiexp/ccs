@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"ccs/internal/activity"
+	"ccs/internal/capture"
 	"ccs/internal/types"
 )
 
@@ -36,49 +37,92 @@ func (m Model) View() string {
 	header += sortIndicator
 	sections = append(sections, header)
 
-	// Sessions header
-	showDetail := m.focus == FocusSessions && len(m.filtered) > 0
-	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
-	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
-	// Active count
-	activeCount := 0
-	for _, s := range m.filtered {
-		if s.IsActive {
-			activeCount++
+	// Search results mode
+	if m.filtering && len(m.searchResults) > 0 {
+		for i, r := range m.searchResults {
+			isSelected := i == m.searchIdx
+			sections = append(sections, m.renderSearchResult(r, isSelected))
+		}
+		sections = append(sections, m.renderFooter())
+		content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+		bs := borderStyle
+		if m.width > 0 {
+			bs = bs.Width(m.width - 2)
+		}
+		return bs.Render(content)
+	}
+
+	active := m.activeSessions()
+	openList := m.openSessions()
+	nActive := len(active)
+
+	// ACTIVE section
+	if nActive > 0 {
+		activeHeader := sectionStyle.Render("ACTIVE") + dimStyle.Render(fmt.Sprintf(" (%d)", nActive))
+		sections = append(sections, activeHeader)
+
+		for i, s := range active {
+			globalIdx := i // active sessions are first in filtered list
+			sections = append(sections, m.renderActiveRow(globalIdx, s))
 		}
 	}
-	if activeCount > 0 {
-		sessHeader += "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render(fmt.Sprintf("%d active", activeCount))
-	}
-	sections = append(sections, sessHeader)
 
-	start, end := m.scrollWindow()
-	maxRows := end - start
+	// OPEN section
+	openHeader := sectionStyle.Render("OPEN") + dimStyle.Render(fmt.Sprintf(" (%d)", len(openList)))
+	sections = append(sections, openHeader)
 
-	if len(m.filtered) == 0 {
+	if len(openList) == 0 && nActive == 0 {
 		sections = append(sections, dimStyle.Render("  no sessions"))
-	} else {
+	} else if len(openList) > 0 {
+		start, end := m.scrollWindow()
 		for i := start; i < end; i++ {
-			s := m.filtered[i]
-			if showDetail && i == m.sessionIdx {
+			s := openList[i]
+			globalIdx := nActive + i
+			isSelected := globalIdx == m.sessionIdx
+			if isSelected {
 				sections = append(sections, m.renderDetail(s))
 			} else {
-				sections = append(sections, m.renderSession(i+1, s))
+				sections = append(sections, m.renderOpenRow(globalIdx+1, s))
 			}
 		}
-		// Scroll position indicator
-		if len(m.filtered) > maxRows {
-			indicator := dimStyle.Render(fmt.Sprintf("  ── %d/%d ──", m.sessionIdx+1, len(m.filtered)))
+		if len(openList) > (end - start) {
+			openIdx := m.sessionIdx - nActive
+			if openIdx < 0 {
+				openIdx = 0
+			}
+			indicator := dimStyle.Render(fmt.Sprintf("  ── %d/%d ──", openIdx+1, len(openList)))
 			sections = append(sections, indicator)
 		}
 	}
 
-	// Projects
-	projHeader := sectionStyle.Render("PROJECTS")
-	sections = append(sections, projHeader)
-	sections = append(sections, m.renderProjects())
+	// Done/untracked section (when visible)
+	if m.showDoneUntracked {
+		var doneUntracked []types.Session
+		for _, s := range m.filtered {
+			if s.StateStatus == types.StatusDone || s.StateStatus == types.StatusUntracked {
+				doneUntracked = append(doneUntracked, s)
+			}
+		}
+		if len(doneUntracked) > 0 {
+			for _, s := range doneUntracked {
+				globalIdx := -1
+				for gi, fs := range m.filtered {
+					if fs.ID == s.ID {
+						globalIdx = gi
+						break
+					}
+				}
+				badge := "·"
+				if s.StateStatus == types.StatusDone {
+					badge = "✓"
+				}
+				isSelected := globalIdx == m.sessionIdx
+				sections = append(sections, m.renderDoneRow(badge, s, isSelected))
+			}
+		}
+	}
 
-	// Footer / confirmation / error
+	// Footer
 	if m.errMsg != "" {
 		errLine := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
@@ -86,6 +130,11 @@ func (m Model) View() string {
 			MarginTop(1).
 			Render(m.errMsg)
 		sections = append(sections, errLine)
+	} else if m.renaming {
+		renameView := lipgloss.NewStyle().
+			MarginTop(1).
+			Render(m.renameInput.View())
+		sections = append(sections, renameView)
 	} else if m.confirming && m.confirmSess != nil {
 		title := m.confirmSess.Title
 		if len(title) > 40 {
@@ -115,19 +164,17 @@ func (m Model) View() string {
 func (m Model) renderFollowView() string {
 	var sections []string
 
-	// Header
 	header := titleStyle.Render("ccs")
 	sortIndicator := dimStyle.Render(fmt.Sprintf("  sort: %s %s", m.sortField, m.sortDir))
 	header += sortIndicator
 	sections = append(sections, header)
 
-	// Compressed session list — show up to 8 rows without detail pane
+	// Compressed session list
 	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
 	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
 	sections = append(sections, sessHeader)
 
-	// Calculate how many session rows fit in top ~40%
-	topRows := (m.height * 40 / 100) - 4 // header(1) + sessHeader(1) + footer(1) + border(1)
+	topRows := (m.height * 40 / 100) - 4
 	if topRows < 3 {
 		topRows = 3
 	}
@@ -138,7 +185,6 @@ func (m Model) renderFollowView() string {
 		topRows = len(m.filtered)
 	}
 
-	// Center scroll around selected
 	half := topRows / 2
 	start := m.sessionIdx - half
 	if start < 0 {
@@ -156,11 +202,11 @@ func (m Model) renderFollowView() string {
 		sections = append(sections, dimStyle.Render("  no sessions"))
 	} else {
 		for i := start; i < end; i++ {
-			sections = append(sections, m.renderSession(i+1, m.filtered[i]))
+			sections = append(sections, m.renderOpenRow(i+1, m.filtered[i]))
 		}
 	}
 
-	// Follow pane — bottom portion
+	// Follow pane
 	var followedSess *types.Session
 	for _, s := range m.filtered {
 		if s.ID == m.followID {
@@ -170,16 +216,15 @@ func (m Model) renderFollowView() string {
 		}
 	}
 
-	contentWidth := m.width - 6 // outer border(2) + padding(2) + pane border(2)
+	contentWidth := m.width - 6
 	if contentWidth < 40 {
 		contentWidth = 40
 	}
-	paneWidth := contentWidth - 2 // pane padding
+	paneWidth := contentWidth - 2
 
-	// Pane header
 	paneTitle := "Following: "
 	if followedSess != nil {
-		paneTitle += followedSess.ProjectName + " — " + followedSess.Title
+		paneTitle += followedSess.ProjectName + " — " + m.displayName(*followedSess)
 	} else {
 		paneTitle += m.followID
 	}
@@ -188,12 +233,10 @@ func (m Model) renderFollowView() string {
 	}
 	paneHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99")).Render(paneTitle)
 
-	// Pane content
 	paneText := dimStyle.Render("Waiting for capture...")
 	if snap, ok := m.paneContent[m.followID]; ok && snap.Content != "" {
-		// Show last N lines that fit, bottom-anchored
 		paneLines := strings.Split(snap.Content, "\n")
-		availPaneRows := m.height - len(sections) - 6 // footer(1) + pane border(2) + pane header(2) + margin(1)
+		availPaneRows := m.height - len(sections) - 6
 		if availPaneRows < 3 {
 			availPaneRows = 3
 		}
@@ -210,7 +253,6 @@ func (m Model) renderFollowView() string {
 	}
 	sections = append(sections, paneStyle.Render(paneContent))
 
-	// Follow mode footer
 	followFooter := footerStyle.Render("f unfollow  esc exit  enter switch  / search  ? help  q quit")
 	sections = append(sections, followFooter)
 
@@ -224,128 +266,170 @@ func (m Model) renderFollowView() string {
 	return bs.Render(content)
 }
 
-// renderSession renders a non-selected session row. visNum is the window-local
-// shortcut number (1-9+), not the global index.
-func (m Model) renderSession(visNum int, s types.Session) string {
-	// Three-state dot based on ActiveSource
-	var dot string
-	switch s.ActiveSource {
-	case types.SourceTmux:
-		dot = activeDot
-	case types.SourceProc:
-		dot = externalDot
-	default:
-		dot = inactiveDot
-	}
+// renderActiveRow renders an expanded active session (2-3 lines).
+func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
+	isSelected := globalIdx == m.sessionIdx
+	contentWidth := m.width - 4
 
-	// Position number, right-aligned to 4 digits
-	numStr := fmt.Sprintf("%4d", visNum)
+	// Badge
+	dot := activeDot
+
+	// Number
+	numStr := fmt.Sprintf("%4d", globalIdx+1)
 	num := numStyle.Render(numStr)
 
-	// Project name (natural width, truncate only if very long)
+	// Project name
 	projName := s.ProjectName
 	if len(projName) > 20 {
 		projName = projName[:19] + "…"
 	}
 
-	// Session name (from /session-name)
-	sessName := ""
-	if s.SessionName != "" {
-		sessName = s.SessionName
-		if len(sessName) > 30 {
-			sessName = sessName[:29] + "…"
+	// Display name
+	name := m.displayName(s)
+	if len([]rune(name)) > 30 {
+		name = string([]rune(name)[:29]) + "…"
+	}
+
+	// Status from pane capture
+	status := ""
+	if snap, ok := m.paneContent[s.ID]; ok {
+		status = capture.DeriveStatus(snap)
+	}
+	if status != "" {
+		if len([]rune(status)) > 40 {
+			status = string([]rune(status)[:40])
 		}
+		status = statusStyle.Render(status)
 	}
 
-	// Context %
-	ctxStr := fmt.Sprintf("%d%%", s.ContextPct)
-
-	// Time
-	timeStr := formatDuration(s.LastActive)
-
-	// Hidden label (only visible in show-hidden mode)
-	hiddenLabel := ""
-	if m.showHidden {
-		for _, id := range m.config.HiddenSessions {
-			if id == s.ID {
-				hiddenLabel = dimStyle.Render("[hidden] ")
-				break
-			}
-		}
-	}
-
-	// Activity text for active sessions (raw, will be truncated below)
-	rawActivity := ""
-	if entries, ok := m.activities[s.ID]; ok && len(entries) > 0 {
-		rawActivity = activity.FormatEntry(entries[0])
-	}
-
-	// Right side (fixed part): ctx% + time + optional hidden label
-	fixedRight := contextStyle(s.ContextPct).Render(ctxStr) + " " + dimStyle.Render(timeStr)
-	if hiddenLabel != "" {
-		fixedRight = hiddenLabel + fixedRight
-	}
-	fixedRightWidth := lipgloss.Width(fixedRight)
-
-	// Left side: dot(1) + space(1) + num(4) + space(1) + proj(natural) + gap(2) [+ sessName + gap(2)]
-	projWidth := lipgloss.Width(projName)
-	sessNameWidth := 0
-	sessNamePart := ""
-	if sessName != "" {
-		sessNamePart = lipgloss.NewStyle().Foreground(lipgloss.Color("183")).Render(sessName)
-		sessNameWidth = lipgloss.Width(sessNamePart) + 2 // + gap before title
-	}
-	leftFixed := 7 + projWidth + 2 + sessNameWidth // dot+space+num+space + proj + gap + sessName + gap
-	// Content area inside outer border: width - border(2) - padding(2) = width - 4
-	contentWidth := m.width - 4
-
-	// Budget: contentWidth = leftFixed + title + gap(2) + [activity + gap(2)] + fixedRight
-	// Allocate at least 10 chars for title, then activity gets the rest
-	activityText := ""
-	if rawActivity != "" {
-		maxActivity := contentWidth - leftFixed - fixedRightWidth - 10 - 6 // 10=minTitle, 6=gaps
-		if maxActivity >= 15 {
-			if lipgloss.Width(rawActivity) > maxActivity {
-				rawActivity = truncateToWidth(rawActivity, maxActivity)
-			}
-			activityText = activityStyle.Render(rawActivity)
-		}
-	}
-
-	rightSide := fixedRight
-	if activityText != "" {
-		rightSide = activityText + "  " + rightSide
-	}
+	// Right side
+	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
+	timeStr := dimStyle.Render(formatDuration(s.LastActive))
+	rightSide := ctxStr + " " + timeStr
 	rightWidth := lipgloss.Width(rightSide)
 
-	// Title gets whatever space remains, minus gap(2) before right side
-	maxTitle := contentWidth - leftFixed - rightWidth - 2
-	if maxTitle < 10 {
-		maxTitle = 10
+	// Header line
+	leftParts := fmt.Sprintf("%s %s %s  %s", dot, num, projName, name)
+	if status != "" {
+		leftParts += "  " + status
+	}
+	gap := contentWidth - lipgloss.Width(leftParts) - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	headerLine := leftParts + strings.Repeat(" ", gap) + rightSide
+
+	if isSelected {
+		headerLine = activeSelectedStyle.Render(truncateToWidth(headerLine, contentWidth))
 	}
 
-	title := truncateToWidth(s.Title, maxTitle)
+	var lines []string
+	lines = append(lines, headerLine)
 
-	var leftSide string
-	if sessName != "" {
-		leftSide = fmt.Sprintf("%s %s %s  %s  %s", dot, num, projName, sessNamePart, title)
-	} else {
-		leftSide = fmt.Sprintf("%s %s %s  %s", dot, num, projName, title)
+	// 1-2 lines of pane capture below
+	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+		paneLines := strings.Split(snap.Content, "\n")
+		n := 2
+		if len(paneLines) < n {
+			n = len(paneLines)
+		}
+		for _, pl := range paneLines[len(paneLines)-n:] {
+			pl = truncateToWidth(strings.TrimSpace(pl), contentWidth-4)
+			if pl != "" {
+				lines = append(lines, "    "+dimStyle.Render(pl))
+			}
+		}
 	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderOpenRow renders a compact session row for the open section.
+func (m Model) renderOpenRow(visNum int, s types.Session) string {
+	contentWidth := m.width - 4
+
+	// Badge based on state
+	badge := openBadge
+	switch s.StateStatus {
+	case types.StatusActive:
+		badge = activeDot
+	case types.StatusDone:
+		badge = doneBadge
+	case types.StatusUntracked:
+		badge = untrackedBadge
+	}
+
+	numStr := fmt.Sprintf("%4d", visNum)
+	num := numStyle.Render(numStr)
+
+	projName := s.ProjectName
+	if len(projName) > 20 {
+		projName = projName[:19] + "…"
+	}
+
+	name := m.displayName(s)
+
+	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
+	timeStr := dimStyle.Render(formatDuration(s.LastActive))
+	rightSide := ctxStr + " " + timeStr
+	rightWidth := lipgloss.Width(rightSide)
+
+	leftFixed := 7 + lipgloss.Width(projName) + 2 // badge+space+num+space + proj + gap
+	maxName := contentWidth - leftFixed - rightWidth - 2
+	if maxName < 10 {
+		maxName = 10
+	}
+	name = truncateToWidth(name, maxName)
+
+	leftSide := fmt.Sprintf("%s %s %s  %s", badge, num, projName, name)
 	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
 		gap = 1
 	}
-	line := leftSide + strings.Repeat(" ", gap) + rightSide
+	return leftSide + strings.Repeat(" ", gap) + rightSide
+}
+
+// renderDoneRow renders a dimmed done/untracked session row.
+func (m Model) renderDoneRow(badge string, s types.Session, isSelected bool) string {
+	contentWidth := m.width - 4
+
+	badgeRendered := dimStyle.Render(badge)
+	if badge == "✓" {
+		badgeRendered = doneBadge
+	}
+
+	projName := s.ProjectName
+	if len(projName) > 20 {
+		projName = projName[:19] + "…"
+	}
+
+	name := m.displayName(s)
+	timeStr := dimStyle.Render(formatDuration(s.LastActive))
+
+	leftFixed := 6 + lipgloss.Width(projName) + 2
+	maxName := contentWidth - leftFixed - lipgloss.Width(timeStr) - 2
+	if maxName < 10 {
+		maxName = 10
+	}
+	name = truncateToWidth(name, maxName)
+
+	line := fmt.Sprintf(" %s  %s  %s", badgeRendered, dimStyle.Render(projName), dimStyle.Render(name))
+	gap := contentWidth - lipgloss.Width(line) - lipgloss.Width(timeStr)
+	if gap < 1 {
+		gap = 1
+	}
+	line += strings.Repeat(" ", gap) + timeStr
+
+	if isSelected {
+		line = activeSelectedStyle.Render(truncateToWidth(line, contentWidth))
+	}
 
 	return line
 }
 
 func (m Model) renderDetail(s types.Session) string {
-	// outer border(2)+padding(2) + detail border(2) = 6 for total rendered width
-	// detail padding(2) further reduces content area since Width() includes padding
-	detailWidth := m.width - 6 // passed to .Width() (includes detail padding)
-	contentWidth := detailWidth - 2 // actual text area (excludes detail padding)
+	detailWidth := m.width - 6
+	contentWidth := detailWidth - 2
 	if detailWidth < 40 {
 		detailWidth = 40
 	}
@@ -353,7 +437,7 @@ func (m Model) renderDetail(s types.Session) string {
 		contentWidth = 38
 	}
 
-	// Status with three-state dot
+	// Status with badge
 	var status string
 	switch s.ActiveSource {
 	case types.SourceTmux:
@@ -361,47 +445,39 @@ func (m Model) renderDetail(s types.Session) string {
 	case types.SourceProc:
 		status = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("● active (external)")
 	default:
-		status = dimStyle.Render("○ inactive")
-	}
-
-	// Hidden?
-	hidden := ""
-	for _, id := range m.config.HiddenSessions {
-		if id == s.ID {
-			hidden = dimStyle.Render("  [hidden]")
-			break
+		if s.StateStatus == types.StatusOpen {
+			status = dimStyle.Render("○ open")
+		} else if s.StateStatus == types.StatusDone {
+			status = dimStyle.Render("✓ done")
+		} else {
+			status = dimStyle.Render("· untracked")
 		}
 	}
 
-	// Header line: project name + session name (if any) + title ... right-aligned ctx% + time
+	// Header line
 	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
 	timePart := dimStyle.Render(formatDuration(s.LastActive))
 	rightSide := ctxPart + " " + timePart
 	rightWidth := lipgloss.Width(rightSide)
 
-	projName := s.ProjectName
-	projPart := detailValueStyle.Render(projName) + "  "
+	projPart := detailValueStyle.Render(s.ProjectName) + "  "
 	headerLeft := projPart
 
-	if s.SessionName != "" {
-		sessNamePart := lipgloss.NewStyle().Foreground(lipgloss.Color("183")).Render(s.SessionName) + "  "
-		headerLeft += sessNamePart
-	}
+	name := m.displayName(s)
 	headerLeftWidth := lipgloss.Width(headerLeft)
-
-	maxTitleWidth := contentWidth - headerLeftWidth - rightWidth - 2
-	if maxTitleWidth < 10 {
-		maxTitleWidth = 10
+	maxNameWidth := contentWidth - headerLeftWidth - rightWidth - 2
+	if maxNameWidth < 10 {
+		maxNameWidth = 10
 	}
-	title := truncateToWidth(s.Title, maxTitleWidth)
-	leftSide := headerLeft + detailValueStyle.Render(title)
+	nameStr := truncateToWidth(name, maxNameWidth)
+	leftSide := headerLeft + detailValueStyle.Render(nameStr)
 	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
 	if gap < 1 {
 		gap = 1
 	}
 	headerLine := leftSide + strings.Repeat(" ", gap) + rightSide
 
-	// Info line: dir/session-id + messages + size
+	// Info line
 	sizeStr := formatSize(s.FileSize)
 	dirWithSession := s.ProjectDir + "/" + s.ID
 	msgsPart := "  " + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " + detailValueStyle.Render(sizeStr)
@@ -413,14 +489,9 @@ func (m Model) renderDetail(s types.Session) string {
 	dirWithSession = truncateToWidth(dirWithSession, maxDirWidth)
 	infoLine := dimStyle.Render(dirWithSession) + msgsPart
 
-	lines := []string{
-		headerLine,
-		infoLine,
-		"",
-		status + hidden,
-	}
+	lines := []string{headerLine, infoLine, "", status}
 
-	// Activity / terminal content below status (full width)
+	// Activity / terminal content
 	hasPaneCapture := false
 	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
 		hasPaneCapture = true
@@ -437,7 +508,6 @@ func (m Model) renderDetail(s types.Session) string {
 		for i, pl := range paneLines {
 			paneLines[i] = truncateToWidth(pl, contentWidth)
 		}
-		// Dim the content for inactive sessions
 		if s.ActiveSource != types.SourceTmux {
 			for i, pl := range paneLines {
 				paneLines[i] = dimStyle.Render(pl)
@@ -446,7 +516,6 @@ func (m Model) renderDetail(s types.Session) string {
 		lines = append(lines, paneLines...)
 	}
 
-	// Activity entries — only show when no pane capture available (avoids redundancy)
 	if !hasPaneCapture {
 		entries := m.activities[s.ID]
 		if len(entries) == 0 && s.FilePath != "" {
@@ -469,8 +538,6 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
-	// Clamp all lines to contentWidth to prevent lipgloss wrapping.
-	// Uses MaxWidth which handles ANSI escape codes correctly.
 	clampStyle := lipgloss.NewStyle().MaxWidth(contentWidth)
 	for i, l := range lines {
 		if lipgloss.Width(l) > contentWidth {
@@ -478,8 +545,6 @@ func (m Model) renderDetail(s types.Session) string {
 		}
 	}
 
-	// Pad to fill the reserved height so the layout doesn't shift.
-	// detailPaneLines() includes border(2), so inner target = detailPaneLines - 2.
 	targetInner := m.detailPaneLines() - 2
 	for len(lines) < targetInner {
 		lines = append(lines, "")
@@ -494,60 +559,38 @@ func (m Model) renderDetail(s types.Session) string {
 	return styled
 }
 
-func (m Model) renderProjects() string {
-	gl := m.computeGridLayout()
-	if gl == nil {
-		return dimStyle.Render("  no projects")
-	}
-
-	gap := 2
-	var lines []string
-	for r := 0; r < gl.rows; r++ {
-		var line strings.Builder
-		line.WriteString("  ")
-		for c := 0; c < gl.cols; c++ {
-			idx := r*gl.cols + c
-			if idx >= len(gl.names) {
-				break
-			}
-			name := gl.names[idx]
-			padded := name + strings.Repeat(" ", gl.colWidths[c]-len(name))
-			if c < gl.cols-1 {
-				padded += strings.Repeat(" ", gap)
-			}
-
-			if m.focus == FocusProjects && idx == m.projectIdx {
-				line.WriteString(selectedProjectStyle.Render(padded))
-			} else if m.filteredProj[idx].Hidden {
-				line.WriteString(hiddenProjectStyle.Render(padded))
-			} else {
-				line.WriteString(normalProjectStyle.Render(padded))
-			}
-		}
-		lines = append(lines, line.String())
-	}
-
-	return strings.Join(lines, "\n")
-}
-
 func (m Model) renderFooter() string {
 	var hints []string
-	if m.focus == FocusSessions && len(m.filtered) > 0 {
-		hints = append(hints, "enter switch/resume", "f follow")
+	if len(m.filtered) > 0 {
+		sess := m.filtered[m.sessionIdx]
+		if sess.StateStatus == types.StatusActive {
+			hints = append(hints, "enter switch", "f follow")
+		} else {
+			hints = append(hints, "enter resume")
+		}
 	}
-	if m.focus == FocusProjects && len(m.filteredProj) > 0 {
-		hints = append(hints, "enter new")
+
+	doneN := m.doneCount()
+	left := ""
+	if doneN > 0 {
+		left = dimStyle.Render(fmt.Sprintf("%d done", doneN))
+		if m.showDoneUntracked {
+			left += " · " + dimStyle.Render("h hide")
+		} else {
+			left += " · " + dimStyle.Render("h show")
+		}
 	}
-	hints = append(hints, "n new", "/ search", "tab switch", "s sort", "r reverse")
-	if m.focus == FocusSessions {
-		hints = append(hints, "x hide")
+
+	hints = append(hints, "c complete", "R rename", "/ search", "? help", "q quit")
+	right := footerStyle.Render(strings.Join(hints, "  "))
+
+	if left != "" {
+		gap := m.width - 4 - lipgloss.Width(left) - lipgloss.Width(right)
+		if gap < 2 {
+			gap = 2
+		}
+		return lipgloss.NewStyle().MarginTop(1).Render(left + strings.Repeat(" ", gap) + right)
 	}
-	if m.showHidden {
-		hints = append(hints, "h hide hidden")
-	} else {
-		hints = append(hints, "h show hidden")
-	}
-	hints = append(hints, "p prefs", "? help", "q quit")
 	return footerStyle.Render(strings.Join(hints, "  "))
 }
 
@@ -555,20 +598,21 @@ func (m Model) renderHelp() string {
 	help := strings.Join([]string{
 		titleStyle.Render("ccs — Claude Code Sessions"),
 		"",
-		"  1-9         Resume session by number",
-		"  enter       Switch to or resume session (tmux)",
+		"  1-9         Switch/resume session by number",
+		"  enter       Active → switch, otherwise → resume",
 		"  f           Follow active session (split pane)",
 		"  esc         Exit follow mode / clear filter",
-		"  n           Jump to projects section",
-		"  /           Toggle filter bar",
-		"  tab         Switch: sessions ↔ projects",
-		"  j/k ↑/↓     Navigate (↑↓←→ in projects)",
+		"  /           Fuzzy search all sessions + project dirs",
+		"  j/k ↑/↓     Navigate active + open list",
 		"  gg/G        Jump to top/bottom",
+		"  c           Mark session as done (complete)",
+		"  o           Reopen a done session",
+		"  R           Rename session",
+		"  N           Re-trigger auto-naming",
 		"  s           Cycle sort: time → ctx% → size → name",
 		"  r           Reverse sort direction",
 		"  d           Delete session (with confirm)",
-		"  x           Hide/unhide session",
-		"  h           Toggle showing hidden items",
+		"  h           Toggle showing done/untracked",
 		"  p           Preferences",
 		"  ?           Toggle this help",
 		"  q / ctrl+c  Quit",
@@ -585,13 +629,13 @@ func (m Model) renderHelp() string {
 func (m Model) renderPrefs() string {
 	type prefItem struct {
 		label string
-		value string // non-empty for cycle items, empty for toggle
-		on    bool   // only for toggles
+		value string
+		on    bool
 	}
 	items := []prefItem{
 		{"Relative numbers (nvim-style)", "", m.config.RelativeNumbers},
 		{"Activity lines", fmt.Sprintf("%d", m.config.ActivityLines), false},
-		{"Project name length", fmt.Sprintf("%d", m.config.ProjectNameMax), false},
+		{"Auto-name lines", fmt.Sprintf("%d", m.config.AutoNameLines), false},
 	}
 
 	lines := []string{
@@ -607,10 +651,8 @@ func (m Model) renderPrefs() string {
 		var indicator string
 		label := item.label
 		if item.value != "" {
-			// Cycle item
 			indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render("[" + item.value + "]")
 		} else {
-			// Toggle item
 			indicator = dimStyle.Render("[ ]")
 			if item.on {
 				indicator = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("[✓]")
@@ -635,6 +677,61 @@ func (m Model) renderPrefs() string {
 	return styled
 }
 
+// renderSearchResult renders a single search result row with state badge.
+func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
+	contentWidth := m.width - 4
+
+	var badge, name, projName, rightSide string
+
+	if r.Session != nil {
+		s := r.Session
+		switch s.StateStatus {
+		case types.StatusActive:
+			badge = activeDot
+		case types.StatusOpen:
+			badge = openBadge
+		case types.StatusDone:
+			badge = doneBadge
+		case types.StatusUntracked:
+			badge = untrackedBadge
+		}
+		projName = s.ProjectName
+		if len(projName) > 20 {
+			projName = projName[:19] + "…"
+		}
+		name = m.displayName(*s)
+		ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
+		timeStr := dimStyle.Render(formatDuration(s.LastActive))
+		rightSide = ctxStr + " " + timeStr
+	} else {
+		badge = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render("▸")
+		projName = r.DirName
+		name = dimStyle.Render(r.DirPath)
+		rightSide = dimStyle.Render("(new session)")
+	}
+
+	rightWidth := lipgloss.Width(rightSide)
+	leftFixed := 3 + lipgloss.Width(projName) + 2 // badge+space + proj + gap
+	maxName := contentWidth - leftFixed - rightWidth - 2
+	if maxName < 10 {
+		maxName = 10
+	}
+	name = truncateToWidth(name, maxName)
+
+	leftSide := fmt.Sprintf(" %s %s  %s", badge, projName, name)
+	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	line := leftSide + strings.Repeat(" ", gap) + rightSide
+
+	if isSelected {
+		line = activeSelectedStyle.Render(truncateToWidth(line, contentWidth))
+	}
+
+	return line
+}
+
 func formatSize(bytes int64) string {
 	switch {
 	case bytes >= 1024*1024:
@@ -646,20 +743,6 @@ func formatSize(bytes int64) string {
 	}
 }
 
-// truncateName truncates a project name to maxLen runes, appending "…" if truncated.
-func truncateName(name string, maxLen int) string {
-	runes := []rune(name)
-	if len(runes) <= maxLen {
-		return name
-	}
-	if maxLen <= 1 {
-		return "…"
-	}
-	return string(runes[:maxLen-1]) + "…"
-}
-
-// truncateToWidth truncates a string to fit within maxWidth visual columns.
-// Uses lipgloss.Width for accurate measurement (handles multi-byte UTF-8).
 func truncateToWidth(s string, maxWidth int) string {
 	if lipgloss.Width(s) <= maxWidth {
 		return s
@@ -667,7 +750,7 @@ func truncateToWidth(s string, maxWidth int) string {
 	runes := []rune(s)
 	for len(runes) > 0 {
 		candidate := string(runes[:len(runes)-1])
-		if lipgloss.Width(candidate)+1 <= maxWidth { // +1 for "…"
+		if lipgloss.Width(candidate)+1 <= maxWidth {
 			return candidate + "…"
 		}
 		runes = runes[:len(runes)-1]
@@ -685,6 +768,9 @@ func formatDuration(t time.Time) string {
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	}
 	h := int(d.Hours())
+	if h >= 24 {
+		return fmt.Sprintf("%dd", h/24)
+	}
 	m := int(d.Minutes()) % 60
 	if m == 0 {
 		return fmt.Sprintf("%dh", h)

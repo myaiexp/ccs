@@ -8,8 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ccs/internal/config"
-	"ccs/internal/project"
 	"ccs/internal/session"
+	"ccs/internal/state"
 	"ccs/internal/tmux"
 	"ccs/internal/tui"
 	"ccs/internal/watcher"
@@ -62,8 +62,10 @@ func main() {
 		defer w.Close()
 	}
 
-	projects := project.DiscoverProjects(sessions, cfg)
-	model := tui.New(sessions, projects, cfg, tracker, w, projectsDir)
+	st := state.Load()
+
+	projectsRoot := filepath.Join(home, "Projects")
+	model := tui.New(sessions, cfg, tracker, st, w, projectsDir, projectsRoot)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
