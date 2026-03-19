@@ -592,13 +592,20 @@ func (m Model) renderDetail(s types.Session) string {
 			leftPad = 0
 		}
 		row := left + strings.Repeat(" ", leftPad) + divider + right
+		// Hard cap: ensure no row exceeds content width (ANSI codes can cause miscalculation)
+		row = truncateToWidth(row, contentWidth)
 		bodyLines = append(bodyLines, row)
 	}
 
-	lines := []string{headerLine, infoLine, ""}
-	lines = append(lines, bodyLines...)
+	// Cap all lines to content width to prevent border overflow
+	allLines := []string{
+		truncateToWidth(headerLine, contentWidth),
+		truncateToWidth(infoLine, contentWidth),
+		"",
+	}
+	allLines = append(allLines, bodyLines...)
 
-	content := strings.Join(lines, "\n")
+	content := strings.Join(allLines, "\n")
 	styled := detailBorderStyle.Width(detailWidth).Render(content)
 
 	return styled

@@ -915,8 +915,8 @@ func (m *Model) maxActiveStatusLines() int {
 	}
 
 	perSession := avail / nActive
-	if perSession > 5 {
-		perSession = 5
+	if perSession > 3 {
+		perSession = 3
 	}
 	return perSession
 }
