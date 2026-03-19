@@ -39,9 +39,40 @@ func (m Model) View() string {
 
 	// Search results mode
 	if m.filtering && len(m.searchResults) > 0 {
-		for i, r := range m.searchResults {
+		nResults := len(m.searchResults)
+		// Fixed overhead: header(1) + footer(1) + border(2) + count line(1)
+		availHeight := m.height - 5
+		if availHeight < 3 {
+			availHeight = 3
+		}
+		maxRows := availHeight
+		if maxRows > nResults {
+			maxRows = nResults
+		}
+
+		// Center scroll window around searchIdx
+		half := maxRows / 2
+		start := m.searchIdx - half
+		if start < 0 {
+			start = 0
+		}
+		if start > nResults-maxRows {
+			start = max(0, nResults-maxRows)
+		}
+		end := start + maxRows
+		if end > nResults {
+			end = nResults
+		}
+
+		countLine := dimStyle.Render(fmt.Sprintf("  %d results", nResults))
+		if nResults > maxRows {
+			countLine = dimStyle.Render(fmt.Sprintf("  %d/%d results", m.searchIdx+1, nResults))
+		}
+		sections = append(sections, countLine)
+
+		for i := start; i < end; i++ {
 			isSelected := i == m.searchIdx
-			sections = append(sections, m.renderSearchResult(r, isSelected))
+			sections = append(sections, m.renderSearchResult(m.searchResults[i], isSelected))
 		}
 		sections = append(sections, m.renderFooter())
 		content := lipgloss.JoinVertical(lipgloss.Left, sections...)

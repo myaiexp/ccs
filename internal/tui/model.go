@@ -694,6 +694,9 @@ func (m *Model) applyFilter() {
 		}
 		sessMatches := fuzzy.Find(query, sessTargets)
 		for _, match := range sessMatches {
+			if match.Score <= 0 {
+				continue
+			}
 			s := source[match.Index]
 			m.searchResults = append(m.searchResults, SearchResult{Session: &s})
 		}
@@ -705,6 +708,9 @@ func (m *Model) applyFilter() {
 		}
 		dirMatches := fuzzy.Find(query, dirTargets)
 		for _, match := range dirMatches {
+			if match.Score <= 0 {
+				continue
+			}
 			d := m.projectDirs[match.Index]
 			m.searchResults = append(m.searchResults, SearchResult{DirPath: d.Path, DirName: d.Name})
 		}
