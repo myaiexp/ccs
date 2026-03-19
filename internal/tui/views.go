@@ -350,15 +350,14 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 	lines = append(lines, headerLine)
 
 	// Show AI status history with fading colors (newest = brightest, oldest = dimmest)
+	maxShow := m.maxActiveStatusLines()
 	history := m.state.StatusHistory(s.ID)
-	maxShow := 5
 	if len(history) > maxShow {
 		history = history[len(history)-maxShow:]
 	}
 
 	if len(history) > 0 {
-		// Render in reverse: newest at bottom (closest to header), oldest at top
-		// But display top-to-bottom: oldest first, newest last
+		// Display top-to-bottom: oldest first, newest last
 		for i, entry := range history {
 			// Fade index: 0 = oldest shown = dimmest, len-1 = newest = brightest
 			fadeIdx := len(history) - 1 - i
@@ -370,17 +369,21 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 			text := truncateToWidth(entry.Text, contentWidth-6)
 			lines = append(lines, "      "+style.Render(text))
 		}
-	} else if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-		// Fallback: show pane capture while waiting for first AI summary
-		paneLines := strings.Split(snap.Content, "\n")
-		n := 2
-		if len(paneLines) < n {
-			n = len(paneLines)
-		}
-		for _, pl := range paneLines[len(paneLines)-n:] {
-			pl = truncateToWidth(strings.TrimSpace(pl), contentWidth-6)
-			if pl != "" {
-				lines = append(lines, "      "+dimStyle.Render(pl))
+	} else if maxShow > 0 {
+		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+			paneLines := strings.Split(snap.Content, "\n")
+			n := 2
+			if n > maxShow {
+				n = maxShow
+			}
+			if len(paneLines) < n {
+				n = len(paneLines)
+			}
+			for _, pl := range paneLines[len(paneLines)-n:] {
+				pl = truncateToWidth(strings.TrimSpace(pl), contentWidth-6)
+				if pl != "" {
+					lines = append(lines, "      "+dimStyle.Render(pl))
+				}
 			}
 		}
 	}

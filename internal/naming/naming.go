@@ -39,8 +39,8 @@ Reply with ONLY the name, nothing else.
 Status updates (oldest to newest):
 %s`
 
-const comprehensivePrompt = `Based on these periodic status updates from a Claude Code session, write a concise summary (3-5 lines) of what the session did, key decisions made, and the outcome.
-Be specific about what was accomplished, not vague. No bullet points — use flowing text.
+const comprehensivePrompt = `Based on these periodic status updates from a Claude Code session, write a 2-3 sentence summary of what was accomplished.
+Start with a capital letter. Be specific and concise. Max 200 characters total.
 
 Status updates (oldest to newest):
 %s`

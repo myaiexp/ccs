@@ -880,23 +880,70 @@ func (m *Model) displayName(s types.Session) string {
 	return s.Title
 }
 
+// maxActiveStatusLines returns how many status lines each active session may show,
+// capped to fit within terminal height alongside other sections.
+func (m *Model) maxActiveStatusLines() int {
+	active := m.activeSessions()
+	openList := m.openSessions()
+	nActive := len(active)
+	nOpen := len(openList)
+
+	if nActive == 0 || m.height == 0 {
+		return 5
+	}
+
+	// Non-active overhead: border(2) + title(1) + ACTIVE header+margin(2) +
+	// OPEN header+margin(2) + scroll indicator(1) + footer+margin(2) = 10
+	overhead := 10
+
+	// Detail pane
+	if m.sessionIdx >= nActive && nOpen > 0 {
+		overhead += m.detailPaneLines()
+	}
+
+	// 1 header line per active session (no status)
+	overhead += nActive
+
+	// Reserve at least 1 open row
+	if nOpen > 0 {
+		overhead++
+	}
+
+	avail := m.height - overhead
+	if avail <= 0 {
+		return 0
+	}
+
+	perSession := avail / nActive
+	if perSession > 5 {
+		perSession = 5
+	}
+	return perSession
+}
+
 // activeRowLines returns how many lines an active row takes.
 func (m *Model) activeRowLines(s types.Session) int {
+	maxStatus := m.maxActiveStatusLines()
 	lines := 1 // header line
 	history := m.state.StatusHistory(s.ID)
 	if len(history) > 0 {
 		n := len(history)
-		if n > 5 {
-			n = 5
+		if n > maxStatus {
+			n = maxStatus
 		}
 		lines += n
-	} else if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-		paneLines := strings.Split(snap.Content, "\n")
-		n := 2
-		if len(paneLines) < n {
-			n = len(paneLines)
+	} else if maxStatus > 0 {
+		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+			paneLines := strings.Split(snap.Content, "\n")
+			n := 2
+			if n > maxStatus {
+				n = maxStatus
+			}
+			if len(paneLines) < n {
+				n = len(paneLines)
+			}
+			lines += n
 		}
-		lines += n
 	}
 	return lines
 }
@@ -919,11 +966,11 @@ func (m *Model) scrollWindow() (int, int) {
 		activeLines += m.activeRowLines(s)
 	}
 	if nActive > 0 {
-		activeLines += 2 // ACTIVE header + blank
+		activeLines += 2 // ACTIVE header + margin
 	}
 
-	// Fixed overhead: outer border(2) + title(1) + open header(1) + footer(2)
-	fixedOverhead := 6 + activeLines
+	// Fixed overhead: border(2) + title(1) + OPEN header+margin(2) + scroll indicator(1) + footer+margin(2) = 8
+	fixedOverhead := 8 + activeLines
 
 	showDetail := m.sessionIdx >= nActive && nOpen > 0
 	if showDetail {
@@ -932,8 +979,8 @@ func (m *Model) scrollWindow() (int, int) {
 
 	availHeight := m.height - fixedOverhead
 	maxRows := availHeight
-	if maxRows < 3 {
-		maxRows = 3
+	if maxRows < 0 {
+		maxRows = 0
 	}
 	if maxRows > nOpen {
 		maxRows = nOpen
