@@ -135,9 +135,9 @@ func TestParseSession_Synthetic(t *testing.T) {
 	if sess.Title != "Hello, can you help me with something?" {
 		t.Errorf("Title = %q, want first non-meta user message", sess.Title)
 	}
-	// Context % = (8000+12000+20000)*100/200000 = 20
-	if sess.ContextPct != 20 {
-		t.Errorf("ContextPct = %d, want 20", sess.ContextPct)
+	// Context % = (8000+12000+20000)*100/1000000 = 4
+	if sess.ContextPct != 4 {
+		t.Errorf("ContextPct = %d, want 4", sess.ContextPct)
 	}
 }
 

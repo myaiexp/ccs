@@ -44,7 +44,7 @@ var (
 	mdBoldRe    = regexp.MustCompile(`\*\*([^*]*)\*\*`)
 )
 
-const maxContextTokens = 200000
+const maxContextTokens = 1000000
 
 // ParseSession reads a JSONL file and extracts session metadata.
 // Does NOT read full content — only enough for listing.

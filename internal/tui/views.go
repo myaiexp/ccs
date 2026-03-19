@@ -303,7 +303,7 @@ var statusFadeColors = []string{"252", "248", "245", "242", "239"}
 
 func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 	isSelected := globalIdx == m.sessionIdx
-	contentWidth := m.width - 4
+	contentWidth := m.width - 5
 
 	cursor := "  "
 	if isSelected {
@@ -390,7 +390,7 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 
 // renderOpenRow renders a compact session row for the open section.
 func (m Model) renderOpenRow(visNum int, s types.Session) string {
-	contentWidth := m.width - 4
+	contentWidth := m.width - 5
 
 	// Badge based on state
 	badge := openBadge
@@ -435,7 +435,7 @@ func (m Model) renderOpenRow(visNum int, s types.Session) string {
 
 // renderDoneRow renders a dimmed done/untracked session row.
 func (m Model) renderDoneRow(badge string, s types.Session, isSelected bool) string {
-	contentWidth := m.width - 4
+	contentWidth := m.width - 5
 
 	cursor := "  "
 	if isSelected {
@@ -474,7 +474,7 @@ func (m Model) renderDoneRow(badge string, s types.Session, isSelected bool) str
 
 func (m Model) renderDetail(s types.Session) string {
 	detailWidth := m.width - 6
-	contentWidth := detailWidth - 2
+	contentWidth := detailWidth
 	if detailWidth < 40 {
 		detailWidth = 40
 	}
@@ -746,7 +746,7 @@ func (m Model) renderPrefs() string {
 
 // renderSearchResult renders a single search result row with state badge.
 func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
-	contentWidth := m.width - 4
+	contentWidth := m.width - 5
 
 	var badge, name, projName, rightSide string
 

@@ -685,7 +685,22 @@ func (m *Model) applyFilter() {
 
 	if query != "" {
 		// Fuzzy search all sessions + project dirs → searchResults
+		// Project dirs first (for quick new session launch), then sessions
 		m.searchResults = nil
+
+		// Match project dirs (shown first)
+		dirTargets := make([]string, len(m.projectDirs))
+		for i, d := range m.projectDirs {
+			dirTargets[i] = d.Name
+		}
+		dirMatches := fuzzy.Find(query, dirTargets)
+		for _, match := range dirMatches {
+			if match.Score <= 0 {
+				continue
+			}
+			d := m.projectDirs[match.Index]
+			m.searchResults = append(m.searchResults, SearchResult{DirPath: d.Path, DirName: d.Name})
+		}
 
 		// Match sessions
 		sessTargets := make([]string, len(source))
@@ -699,20 +714,6 @@ func (m *Model) applyFilter() {
 			}
 			s := source[match.Index]
 			m.searchResults = append(m.searchResults, SearchResult{Session: &s})
-		}
-
-		// Match project dirs
-		dirTargets := make([]string, len(m.projectDirs))
-		for i, d := range m.projectDirs {
-			dirTargets[i] = d.Name
-		}
-		dirMatches := fuzzy.Find(query, dirTargets)
-		for _, match := range dirMatches {
-			if match.Score <= 0 {
-				continue
-			}
-			d := m.projectDirs[match.Index]
-			m.searchResults = append(m.searchResults, SearchResult{DirPath: d.Path, DirName: d.Name})
 		}
 
 		// Also build filtered for compatibility (session results only)
