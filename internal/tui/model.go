@@ -348,6 +348,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.errMsg = "Session still running — complete after it ends"
 					} else if r.Session.StateStatus != types.StatusDone {
 						m.state.MarkDone(r.Session.ID)
+						computeStateStatuses(m.sessions, m.tracker, m.state)
 						m.applyFilter()
 					}
 				}
@@ -359,6 +360,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				r := m.searchResults[m.searchIdx]
 				if r.Session != nil && r.Session.StateStatus == types.StatusDone {
 					m.state.Reopen(r.Session.ID)
+					computeStateStatuses(m.sessions, m.tracker, m.state)
 					m.applyFilter()
 				}
 			}
@@ -514,6 +516,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.errMsg = "Session still running — complete after it ends"
 			} else if sess.StateStatus != types.StatusDone {
 				m.state.MarkDone(sess.ID)
+				computeStateStatuses(m.sessions, m.tracker, m.state)
 				m.applyFilter()
 			}
 		}
@@ -524,6 +527,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sess := m.filtered[m.sessionIdx]
 			if sess.StateStatus == types.StatusDone {
 				m.state.Reopen(sess.ID)
+				computeStateStatuses(m.sessions, m.tracker, m.state)
 				m.applyFilter()
 			}
 		}
@@ -971,7 +975,12 @@ func (m *Model) detailPaneLines() int {
 // computeStateStatuses sets StateStatus on each session by merging tracker and state store.
 // Returns IDs of sessions that were just promoted to open.
 func computeStateStatuses(sessions []types.Session, tracker *session.Tracker, st *state.Store) []string {
-	openIDs := tracker.ActiveSessionIDs()
+	var openIDs map[string]bool
+	if tracker != nil {
+		openIDs = tracker.ActiveSessionIDs()
+	} else {
+		openIDs = make(map[string]bool)
+	}
 	var promoted []string
 	for i := range sessions {
 		id := sessions[i].ID

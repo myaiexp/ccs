@@ -225,6 +225,90 @@ func TestContextStyle(t *testing.T) {
 	_ = contextStyle(100)
 }
 
+func TestMarkDoneImmediatelyUpdatesFiltered(t *testing.T) {
+	st := tempState(t)
+	st.MarkOpen("o1")
+	st.MarkOpen("o2")
+
+	sessions := []types.Session{
+		{ID: "o1", LastActive: time.Now().Add(-time.Hour)},
+		{ID: "o2", LastActive: time.Now().Add(-2 * time.Hour)},
+	}
+	// Set initial StateStatus via computeStateStatuses (no tracker = no active sessions)
+	computeStateStatuses(sessions, nil, st)
+
+	m := &Model{
+		sessions:  sessions,
+		config:    &types.Config{},
+		sortField: types.SortByTime,
+		sortDir:   types.SortDesc,
+		state:     st,
+		filter:    textinput.New(),
+	}
+	m.applyFilter()
+
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected 2 open sessions, got %d", len(m.filtered))
+	}
+
+	// Mark first session done — should immediately disappear from filtered
+	m.sessionIdx = 0
+	m.state.MarkDone(m.filtered[0].ID)
+	computeStateStatuses(m.sessions, m.tracker, m.state)
+	m.applyFilter()
+
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected 1 open session after marking done, got %d", len(m.filtered))
+	}
+	if m.filtered[0].ID != "o2" {
+		t.Errorf("remaining session should be o2, got %s", m.filtered[0].ID)
+	}
+
+	// The done session should have StatusDone in m.sessions
+	for _, s := range m.sessions {
+		if s.ID == "o1" && s.StateStatus != types.StatusDone {
+			t.Errorf("o1 StateStatus = %v, want StatusDone", s.StateStatus)
+		}
+	}
+}
+
+func TestReopenImmediatelyUpdatesFiltered(t *testing.T) {
+	st := tempState(t)
+	st.MarkOpen("o1")
+	st.MarkDone("d1")
+
+	sessions := []types.Session{
+		{ID: "o1", LastActive: time.Now().Add(-time.Hour)},
+		{ID: "d1", LastActive: time.Now().Add(-2 * time.Hour)},
+	}
+	computeStateStatuses(sessions, nil, st)
+
+	m := &Model{
+		sessions:          sessions,
+		config:            &types.Config{},
+		sortField:         types.SortByTime,
+		sortDir:           types.SortDesc,
+		state:             st,
+		filter:            textinput.New(),
+		showDoneUntracked: true,
+	}
+	m.applyFilter()
+
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected 2 sessions (1 open + 1 done), got %d", len(m.filtered))
+	}
+
+	// Reopen the done session
+	m.state.Reopen("d1")
+	computeStateStatuses(m.sessions, m.tracker, m.state)
+	m.applyFilter()
+
+	open := m.openSessions()
+	if len(open) != 2 {
+		t.Errorf("expected 2 open sessions after reopen, got %d", len(open))
+	}
+}
+
 func TestActiveOpenPartitioning(t *testing.T) {
 	st := tempState(t)
 	m := &Model{
