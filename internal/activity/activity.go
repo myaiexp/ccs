@@ -287,7 +287,9 @@ func ExtractConversationText(path string, maxLines int) string {
 				if role == "assistant" {
 					prefix = "» "
 				}
-				textParts = append(textParts, prefix+block.Text)
+				// Collapse internal newlines so each text block is one line
+				text := strings.Join(strings.Fields(block.Text), " ")
+				textParts = append(textParts, prefix+text)
 			}
 		}
 	}
