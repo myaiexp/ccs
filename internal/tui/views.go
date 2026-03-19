@@ -331,10 +331,7 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 		status = statusStyle.Render(status)
 	}
 
-	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-	timeStr := dimStyle.Render(formatDuration(s.LastActive))
-	rightSide := ctxStr + " " + timeStr
-	rightWidth := lipgloss.Width(rightSide)
+	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
 	leftParts := fmt.Sprintf("%s%s %s %s", cursor, dot, num, projName)
 	if status != "" {
@@ -416,10 +413,7 @@ func (m Model) renderOpenRow(visNum int, s types.Session) string {
 
 	name := m.displayName(s)
 
-	ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-	timeStr := dimStyle.Render(formatDuration(s.LastActive))
-	rightSide := ctxStr + " " + timeStr
-	rightWidth := lipgloss.Width(rightSide)
+	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
 	leftFixed := 7 + lipgloss.Width(projName) + 2 // badge+space+num+space + proj + gap
 	maxName := contentWidth - leftFixed - rightWidth - 2
@@ -486,10 +480,7 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 
 	// Header: project name + display name + ctx% + time
-	ctxPart := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-	timePart := dimStyle.Render(formatDuration(s.LastActive))
-	rightSide := ctxPart + " " + timePart
-	rightWidth := lipgloss.Width(rightSide)
+	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
 	projPart := detailValueStyle.Render(s.ProjectName) + "  "
 	name := m.displayName(s)
@@ -777,9 +768,7 @@ func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
 			projName = projName[:19] + "…"
 		}
 		name = m.displayName(*s)
-		ctxStr := contextStyle(s.ContextPct).Render(fmt.Sprintf("%d%%", s.ContextPct))
-		timeStr := dimStyle.Render(formatDuration(s.LastActive))
-		rightSide = ctxStr + " " + timeStr
+		rightSide, _ = formatRightSide(s.ContextPct, s.LastActive)
 	} else {
 		badge = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render("▸")
 		projName = r.DirName
@@ -808,6 +797,16 @@ func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
 	line := leftSide + strings.Repeat(" ", gap) + rightSide
 
 	return line
+}
+
+// formatRightSide returns the right-aligned "ctx% time" string with fixed-width fields
+// so that the % sign is always vertically aligned across rows.
+func formatRightSide(pct int, t time.Time) (rendered string, width int) {
+	ctxStr := contextStyle(pct).Render(fmt.Sprintf("%4s", fmt.Sprintf("%d%%", pct)))
+	timeStr := dimStyle.Render(fmt.Sprintf("%8s", formatDuration(t)))
+	rendered = ctxStr + " " + timeStr
+	width = lipgloss.Width(rendered)
+	return
 }
 
 func formatSize(bytes int64) string {

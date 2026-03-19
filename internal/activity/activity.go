@@ -293,7 +293,7 @@ func ExtractConversationText(path string, maxLines int) string {
 	}
 
 	// Join and take last maxLines
-	joined := strings.Join(textParts, "\n\n")
+	joined := strings.Join(textParts, "\n")
 	lines := strings.Split(joined, "\n")
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
