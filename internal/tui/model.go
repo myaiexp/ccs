@@ -51,6 +51,25 @@ type AutoNameTriggerMsg struct {
 	SessionID string
 }
 
+// StatusSummaryTickMsg triggers periodic AI status summaries for active sessions.
+type StatusSummaryTickMsg struct{}
+
+// StatusSummaryMsg delivers a periodic status summary result.
+type StatusSummaryMsg struct {
+	SessionID string
+	Status    string
+	Err       error
+}
+
+// TransitionSummaryMsg delivers the condensed name + comprehensive summary
+// when a session goes inactive.
+type TransitionSummaryMsg struct {
+	SessionID string
+	Name      string
+	Summary   string
+	Err       error
+}
+
 // SearchResult is a union type for search results: either a session or a project directory.
 type SearchResult struct {
 	Session *types.Session // nil for project dir results
@@ -92,6 +111,7 @@ type Model struct {
 	searchResults     []SearchResult                 // populated when filtering
 	searchIdx         int                            // index into searchResults
 	prevActiveIDs     map[string]bool                // previous refresh active set (for transition detection)
+	lastSummaryInput  map[string]string              // sessionID -> pane content hash from last status summary call
 }
 
 func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, st *state.Store, w *watcher.Watcher, projectsDir string, projectsRoot string) Model {
@@ -114,7 +134,8 @@ func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, 
 		projectsDir:   projectsDir,
 		projectsRoot:  projectsRoot,
 		projectDirs:   project.ScanProjectDirs(projectsRoot),
-		prevActiveIDs: make(map[string]bool),
+		prevActiveIDs:    make(map[string]bool),
+		lastSummaryInput: make(map[string]string),
 	}
 	_ = computeStateStatuses(m.sessions, m.tracker, m.state)
 	m.applyFilter()
@@ -123,7 +144,12 @@ func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, 
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd(), paneCaptureTickCmd()}
+	// Initial status summary tick fires quickly (5s) to populate on startup;
+	// subsequent ticks are 2 minutes apart (scheduled by the handler).
+	initialStatusTick := tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+		return StatusSummaryTickMsg{}
+	})
+	cmds := []tea.Cmd{tickCmd(), paneCaptureTickCmd(), initialStatusTick}
 
 	if m.watcher != nil {
 		go m.watcher.Run()
@@ -200,6 +226,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		content := m.namingContent(msg.SessionID)
 		if content != "" {
 			return m, autoNameCmd(msg.SessionID, content, m.config.AutoNameLines)
+		}
+		return m, nil
+
+	case StatusSummaryTickMsg:
+		var cmds []tea.Cmd
+		activeCount := 0
+		contentCount := 0
+		newCount := 0
+		for _, s := range m.filtered {
+			if s.StateStatus == types.StatusActive {
+				activeCount++
+				content := m.statusContent(s.ID)
+				if content != "" {
+					contentCount++
+					if m.lastSummaryInput[s.ID] == content {
+						continue // content unchanged, skip haiku call
+					}
+					newCount++
+					m.lastSummaryInput[s.ID] = content
+					cmds = append(cmds, statusSummaryCmd(s.ID, content, m.config.AutoNameLines))
+				}
+			}
+		}
+		naming.LogEntry("TICK active=%d with_content=%d new_content=%d dispatching=%d", activeCount, contentCount, newCount, len(cmds))
+		cmds = append(cmds, statusSummaryTickCmd())
+		return m, tea.Batch(cmds...)
+
+	case StatusSummaryMsg:
+		if msg.Status != "" {
+			m.state.AppendStatus(msg.SessionID, msg.Status, 20)
+		}
+		return m, nil
+
+	case TransitionSummaryMsg:
+		if msg.Name != "" {
+			m.state.SetName(msg.SessionID, msg.Name, state.NameSourceAuto)
+		}
+		if msg.Summary != "" {
+			m.state.SetSummary(msg.SessionID, msg.Summary)
 		}
 		return m, nil
 
@@ -520,10 +585,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "N":
 		if len(m.filtered) > 0 {
 			sess := m.filtered[m.sessionIdx]
-			content := m.namingContent(sess.ID)
+			content := m.statusContent(sess.ID)
 			if content != "" {
-				return m, autoNameCmd(sess.ID, content, m.config.AutoNameLines)
+				return m, statusSummaryCmd(sess.ID, content, m.config.AutoNameLines)
 			}
+			m.errMsg = "No content available for status summary"
 		}
 		return m, nil
 
@@ -666,10 +732,40 @@ func (m *Model) applyFilter() {
 		}
 	}
 
-	// Active: always sorted by last active (most recent first)
-	sort.SliceStable(active, func(i, j int) bool {
-		return active[i].LastActive.After(active[j].LastActive)
-	})
+	// Active: preserve existing order, insert new sessions at the top by recency.
+	// This prevents the list from shuffling under the cursor on every refresh.
+	if len(m.filtered) > 0 {
+		existingOrder := make(map[string]int)
+		for i, s := range m.filtered {
+			if s.StateStatus == types.StatusActive {
+				existingOrder[s.ID] = i
+			}
+		}
+		// Separate known vs new active sessions
+		var known, fresh []types.Session
+		for _, s := range active {
+			if _, exists := existingOrder[s.ID]; exists {
+				known = append(known, s)
+			} else {
+				fresh = append(fresh, s)
+			}
+		}
+		// Known: preserve previous order
+		sort.SliceStable(known, func(i, j int) bool {
+			return existingOrder[known[i].ID] < existingOrder[known[j].ID]
+		})
+		// Fresh: sort by recency
+		sort.SliceStable(fresh, func(i, j int) bool {
+			return fresh[i].LastActive.After(fresh[j].LastActive)
+		})
+		// New sessions appear at top
+		active = append(fresh, known...)
+	} else {
+		// First load: sort by recency
+		sort.SliceStable(active, func(i, j int) bool {
+			return active[i].LastActive.After(active[j].LastActive)
+		})
+	}
 
 	// Open: sorted by user's sort choice
 	m.sortSlice(open)
@@ -774,8 +870,14 @@ func (m *Model) displayName(s types.Session) string {
 // activeRowLines returns how many lines an active row takes.
 func (m *Model) activeRowLines(s types.Session) int {
 	lines := 1 // header line
-	if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-		// Show 1-2 lines of pane capture
+	history := m.state.StatusHistory(s.ID)
+	if len(history) > 0 {
+		n := len(history)
+		if n > 5 {
+			n = 5
+		}
+		lines += n
+	} else if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
 		paneLines := strings.Split(snap.Content, "\n")
 		n := 2
 		if len(paneLines) < n {
@@ -852,12 +954,18 @@ func (m *Model) activityLines() int {
 	return 5
 }
 
-// detailPaneLines returns a fixed height for the detail pane.
+// detailBodyRows returns the number of content rows in the detail pane body.
+func (m *Model) detailBodyRows() int {
+	return m.activityLines() + 3
+}
+
+// detailPaneLines returns the total rendered height of the detail pane (including border).
 func (m *Model) detailPaneLines() int {
 	if len(m.filtered) == 0 {
 		return 0
 	}
-	return 7 + m.activityLines()
+	// border(2) + header+info+blank(3) + body rows
+	return 2 + 3 + m.detailBodyRows()
 }
 
 // computeStateStatuses sets StateStatus on each session by merging tracker and state store.
@@ -906,6 +1014,49 @@ func (m *Model) namingContent(sessionID string) string {
 		}
 	}
 	return ""
+}
+
+func statusSummaryCmd(sessionID, paneContent string, maxLines int) tea.Cmd {
+	return func() tea.Msg {
+		result := naming.GenerateStatus(sessionID, paneContent, maxLines)
+		return StatusSummaryMsg{SessionID: result.SessionID, Status: result.Name, Err: result.Err}
+	}
+}
+
+func statusSummaryTickCmd() tea.Cmd {
+	return tea.Tick(2*time.Minute, func(time.Time) tea.Msg {
+		return StatusSummaryTickMsg{}
+	})
+}
+
+// statusContent returns the best available content for AI status summary.
+// Prefers pane capture, falls back to JSONL conversation text (not raw JSON).
+func (m *Model) statusContent(sessionID string) string {
+	if snap, ok := m.paneContent[sessionID]; ok && snap.Content != "" {
+		return snap.Content
+	}
+	// Fallback: extract conversation text from JSONL (human + assistant text only)
+	for _, s := range m.sessions {
+		if s.ID == sessionID && s.FilePath != "" {
+			return activity.ExtractConversationText(s.FilePath, 30)
+		}
+	}
+	return ""
+}
+
+func transitionSummaryCmd(sessionID string, statusTexts []string) tea.Cmd {
+	return func() tea.Msg {
+		// Generate condensed name from recent summaries
+		nameResult := naming.CondenseName(sessionID, statusTexts)
+		// Generate comprehensive summary from all summaries
+		summaryResult := naming.GenerateComprehensiveSummary(sessionID, statusTexts)
+
+		return TransitionSummaryMsg{
+			SessionID: sessionID,
+			Name:      nameResult.Name,
+			Summary:   summaryResult.Summary,
+		}
+	}
 }
 
 func refreshCmd() tea.Cmd {
@@ -966,15 +1117,26 @@ func (m *Model) handleRefresh() tea.Cmd {
 }
 
 // scheduleNamingTriggers returns naming commands for sessions that just went
-// inactive (immediate) or were just promoted (delayed 30s).
+// inactive (uses transition summary from status history) or were just promoted (delayed initial status).
 func (m *Model) scheduleNamingTriggers(newActiveIDs map[string]bool, justPromoted []string) []tea.Cmd {
 	var cmds []tea.Cmd
 
+	// Sessions that just went inactive → generate transition summary from status history
 	for id := range m.prevActiveIDs {
 		if !newActiveIDs[id] {
-			content := m.namingContent(id)
-			if content != "" {
-				cmds = append(cmds, autoNameCmd(id, content, m.config.AutoNameLines))
+			history := m.state.StatusHistory(id)
+			if len(history) > 0 {
+				texts := make([]string, len(history))
+				for i, h := range history {
+					texts[i] = h.Text
+				}
+				cmds = append(cmds, transitionSummaryCmd(id, texts))
+			} else {
+				// Fallback: no status history, try status summary from conversation text
+				content := m.statusContent(id)
+				if content != "" {
+					cmds = append(cmds, statusSummaryCmd(id, content, m.config.AutoNameLines))
+				}
 			}
 		}
 	}

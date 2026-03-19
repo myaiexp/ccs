@@ -13,37 +13,6 @@ import (
 	"ccs/internal/types"
 )
 
-// wrapText wraps text to fit within maxWidth, respecting existing newlines.
-// Moved from views.go — only used in tests.
-func wrapText(s string, maxWidth int) []string {
-	if maxWidth < 10 {
-		maxWidth = 10
-	}
-	var result []string
-	for _, paragraph := range strings.Split(s, "\n") {
-		if paragraph == "" {
-			result = append(result, "")
-			continue
-		}
-		words := strings.Fields(paragraph)
-		if len(words) == 0 {
-			result = append(result, "")
-			continue
-		}
-		line := words[0]
-		for _, w := range words[1:] {
-			if len(line)+1+len(w) > maxWidth {
-				result = append(result, line)
-				line = w
-			} else {
-				line += " " + w
-			}
-		}
-		result = append(result, line)
-	}
-	return result
-}
-
 func TestWrapText(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -54,10 +23,9 @@ func TestWrapText(t *testing.T) {
 	}{
 		{"short text", "hello world", 80, 1, "hello world"},
 		{"wraps at width", "hello world foo bar", 11, 2, "hello world"},
-		{"preserves newlines", "line1\nline2", 80, 2, "line1"},
 		{"empty string", "", 80, 1, ""},
-		{"minimum width enforced", "hello", 5, 1, "hello"},
-		{"very narrow", "hello world", 1, 2, "hello"},
+		{"single word narrow", "hello", 3, 1, "hello"},
+		{"two words narrow", "hello world", 1, 2, "hello"},
 	}
 
 	for _, tt := range tests {

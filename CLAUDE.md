@@ -22,11 +22,11 @@ internal/
     cache.go               File metadata cache (skip re-parsing unchanged JSONL files)
     tracker.go             PID-based session tracking with tmux window ID support
   state/state.go           Session lifecycle state + names (open/done, auto/manual naming)
-  naming/naming.go         Haiku invocation for auto-naming via `claude --print --model haiku`
+  naming/naming.go         Haiku invocation: status summaries, condensed names, comprehensive summaries. Logged.
   project/project.go       ScanProjectDirs for ~/Projects/ directory listing
   tmux/tmux.go             tmux CLI wrapper: Bootstrap, NewWindow, SelectWindow, WindowExists, CapturePaneContent
   capture/capture.go       PaneSnapshot, CapturePane, DeriveStatus (attention state detection)
-  activity/activity.go     JSONL activity extraction: ExtractFromLine, TailFile, FormatEntry
+  activity/activity.go     JSONL activity extraction: ExtractFromLine, TailFile, FormatEntry, ExtractConversationText
   watcher/watcher.go       fsnotify-based file watcher with debounce, sends ActivityUpdates
   tui/
     model.go               Bubbletea Model, three-section layout, state integration, naming triggers
@@ -46,9 +46,11 @@ go test ./... -count=1          # tests for all packages
 
 - **Session lifecycle** — four states: Active (PID alive, computed), Open (persisted in state.json), Done (user-marked), Untracked (legacy). Active sessions auto-promote to Open. State stored in `~/.cache/ccs/state.json`.
 - **Three-section layout** — Active section (always visible, expanded rows with live status), Open section (scrollable, selected shows detail pane), Done/Untracked (toggled with `h`). Unified j/k navigation across all sections.
-- **Auto-naming** — shells out to `claude --print --model haiku --no-session-persistence` with pane capture or JSONL tail content. Triggers: 30s after promotion, on session going inactive, manual `N` key. Manual names (`R`) never overwritten.
+- **AI status summaries** — periodic (every 2 min) haiku-generated one-line summaries for active sessions. Up to 5 displayed with fading colors (newest brightest). Content source: pane capture → JSONL conversation text fallback. `N` key triggers manually. Skips call if input unchanged. Logged to `~/.cache/ccs/naming.log`.
+- **Transition summaries** — when session goes inactive, haiku condenses status history into a short name + comprehensive multi-line summary for the detail pane.
 - **Display name fallback** — manual name > auto name > /session-name > first user message title
 - **Attention states** — `DeriveStatus()` scans pane content bottom-up: waiting prompt, permission prompt, thinking/spinner, error, or fallback to last content line. Fast pattern matching (1s polling).
+- **Stable active ordering** — active sessions don't re-sort on refresh; only new sessions insert at top. Prevents cursor disorientation.
 - **Search rework** — `/` searches all sessions (any lifecycle state) + project directories at `~/Projects/`. Results show state badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` project dir.
 - **tmux-only mode** — auto-bootstraps into tmux. All sessions open as new tmux windows.
 - **Follow mode** — `f` key on active SourceTmux session enters split view with live pane capture.
@@ -56,8 +58,11 @@ go test ./... -count=1          # tests for all packages
 - **Live activity monitoring** — fsnotify watches active JSONL files. 200ms debounce.
 - **PID-based tracking** — `~/.cache/ccs/active.json` maps session IDs to PIDs and tmux window IDs.
 - **JSONL parsing** streams line-by-line, never loads entire file into memory
+- **Detail pane** — 2-column layout: left = AI comprehensive summary, right = JSONL conversation text (human `›` + assistant `»`, no tool calls). Replaces old single-column activity view.
 - **Known gap**: pane capture for inactive sessions doesn't persist across ccs restarts (only in-memory).
+- **Known gap**: pane capture frequently empty for active sessions (tracker doesn't always have tmux window IDs). JSONL conversation text fallback mitigates this.
 - **lipgloss `.Width()` includes padding** — must subtract padding for text width calculations.
+- **lipgloss background on pre-styled text doesn't work** — inner ANSI resets cancel outer background. Use cursor indicators (`▸`) instead of background highlighting.
 
 ## Key Bindings
 

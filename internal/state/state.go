@@ -20,12 +20,20 @@ const (
 	NameSourceManual = "manual"
 )
 
+// StatusEntry is a periodic AI-generated status summary for an active session.
+type StatusEntry struct {
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // SessionState holds the lifecycle state and ccs-owned metadata for a session.
 type SessionState struct {
-	Status      string     `json:"status"`      // StatusOpen or StatusDone
-	Name        string     `json:"name"`
-	NameSource  string     `json:"name_source"` // NameSourceAuto or NameSourceManual
-	CompletedAt *time.Time `json:"completed_at"`
+	Status        string        `json:"status"`                  // StatusOpen or StatusDone
+	Name          string        `json:"name"`
+	NameSource    string        `json:"name_source"`             // NameSourceAuto or NameSourceManual
+	CompletedAt   *time.Time    `json:"completed_at"`
+	StatusHistory []StatusEntry `json:"status_history,omitempty"` // rolling AI summaries (max 5)
+	Summary       string        `json:"summary,omitempty"`        // comprehensive summary for detail pane
 }
 
 // stateFile is the on-disk JSON format.
@@ -144,6 +152,42 @@ func (s *Store) SetName(id, name, source string) {
 	}
 	st.Name = name
 	st.NameSource = source
+	s.sessions[id] = st
+	s.save()
+}
+
+// AppendStatus adds a status summary entry, keeping the last maxEntries.
+func (s *Store) AppendStatus(id string, text string, maxEntries int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := s.sessions[id]
+	st.StatusHistory = append(st.StatusHistory, StatusEntry{
+		Text:      text,
+		CreatedAt: time.Now(),
+	})
+	if len(st.StatusHistory) > maxEntries {
+		st.StatusHistory = st.StatusHistory[len(st.StatusHistory)-maxEntries:]
+	}
+	s.sessions[id] = st
+	s.save()
+}
+
+// StatusHistory returns the status history for a session.
+func (s *Store) StatusHistory(id string) []StatusEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.sessions[id]
+	return st.StatusHistory
+}
+
+// SetSummary sets the comprehensive summary for a session's detail pane.
+func (s *Store) SetSummary(id, summary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := s.sessions[id]
+	st.Summary = summary
 	s.sessions[id] = st
 	s.save()
 }

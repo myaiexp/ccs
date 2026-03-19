@@ -49,5 +49,14 @@ Sessions in "open" state that haven't been touched in N days get a subtle visual
 ### Frecency-sorted projects in search
 When `/` search shows project directories, sort by frecency (frequency + recency) rather than alphabetical. Projects worked on daily float to top. Low priority since search is fuzzy anyway, but would improve the "I just need to start a new session" flow.
 
+### Pane capture reliability investigation
+Active sessions frequently show `with_pane=0` in the naming log. The tracker has tmux window IDs for sessions launched via ccs, but sessions started manually (`cd && claude`) may not get tracked properly. Need to investigate: why pane content disappears after initial capture, whether the tracker's PID→tmux mapping is breaking on refresh, and whether there's a race between pane capture tick and session refresh.
+
+### Color-coded attention states
+DeriveStatus already detects waiting/permission/thinking/error states, but they all render in the same gray italic. Should be color-coded: bright yellow for "waiting for input", orange for "permission prompt", red for errors, green for "working". This would make the dashboard actually useful for spotting which session needs you.
+
+### In-progress AI summary for open sessions
+Currently the comprehensive summary only generates on transition (active → open). Open sessions that were active before ccs started have no summary. Could generate a summary retroactively from JSONL conversation text when an open session is selected and has no summary yet.
+
 ### Auto-naming prompt iteration
 The haiku naming prompt will need tuning based on real-world results. The initial prompt is task-oriented ("what is this session accomplishing?") but may need refinement. Key insight from discussion: Claude's own `/rename` grabs "interesting" details instead of the actual task — e.g., naming a config-sync setup session "bash-set-e-footgun-fix" because it latched onto a footnote. The ccs prompt must explicitly focus on the goal/task, not incidental details.

@@ -66,7 +66,8 @@ var (
 
 	// Active row selected highlight
 	activeSelectedStyle = lipgloss.NewStyle().
-				Bold(true)
+				Bold(true).
+				Background(lipgloss.Color("236"))
 
 	// Context percentage colors
 	contextGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))

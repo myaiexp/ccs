@@ -231,6 +231,76 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// ExtractConversationText reads a JSONL file and returns human messages + assistant
+// text blocks (no tool calls). Returns the last maxLines of conversation text.
+func ExtractConversationText(path string, maxLines int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	// Read last 128KB for conversation extraction
+	const tailSize = 128 * 1024
+	stat, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+
+	offset := stat.Size() - tailSize
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return ""
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+
+	rawLines := strings.Split(string(data), "\n")
+	if offset > 0 && len(rawLines) > 0 {
+		rawLines = rawLines[1:] // discard partial line
+	}
+
+	var textParts []string
+	for _, line := range rawLines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var l jsonLine
+		if err := json.Unmarshal([]byte(line), &l); err != nil {
+			continue
+		}
+
+		role := l.Message.Role
+		if role != "user" && role != "assistant" {
+			continue
+		}
+
+		for _, block := range l.Message.Content {
+			if block.Type == "text" && block.Text != "" {
+				prefix := "› "
+				if role == "assistant" {
+					prefix = "» "
+				}
+				textParts = append(textParts, prefix+block.Text)
+			}
+		}
+	}
+
+	// Join and take last maxLines
+	joined := strings.Join(textParts, "\n\n")
+	lines := strings.Split(joined, "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // TailFileLines reads the last maxLines lines from a file as plain text.
 func TailFileLines(path string, maxLines int) string {
 	f, err := os.Open(path)
