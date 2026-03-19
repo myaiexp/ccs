@@ -536,7 +536,7 @@ func (m Model) renderDetail(s types.Session) string {
 	assistPrefixStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 	var rightLines []string
 	if s.FilePath != "" {
-		convText := activity.ExtractConversationText(s.FilePath, bodyHeight*3)
+		convText := activity.ExtractConversationText(s.FilePath, bodyHeight*6)
 		if convText != "" {
 			for _, cl := range strings.Split(convText, "\n") {
 				// Style the prefix character, keep the rest dim
@@ -799,12 +799,12 @@ func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
 	return line
 }
 
-// formatRightSide returns the right-aligned "ctx% time" string with fixed-width fields
-// so that the % sign is always vertically aligned across rows.
+// formatRightSide returns the right-aligned "time ctx%" string with fixed-width fields.
+// Context % is on the far right so the % sign naturally aligns across rows.
 func formatRightSide(pct int, t time.Time) (rendered string, width int) {
-	ctxStr := contextStyle(pct).Render(fmt.Sprintf("%4s", fmt.Sprintf("%d%%", pct)))
 	timeStr := dimStyle.Render(fmt.Sprintf("%8s", formatDuration(t)))
-	rendered = ctxStr + " " + timeStr
+	ctxStr := contextStyle(pct).Render(fmt.Sprintf("%4s", fmt.Sprintf("%d%%", pct)))
+	rendered = timeStr + " " + ctxStr
 	width = lipgloss.Width(rendered)
 	return
 }
