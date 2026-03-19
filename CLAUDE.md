@@ -46,22 +46,25 @@ go test ./... -count=1          # tests for all packages
 
 - **Session lifecycle** — four states: Active (PID alive, computed), Open (persisted in state.json), Done (user-marked), Untracked (legacy). Active sessions auto-promote to Open. State stored in `~/.cache/ccs/state.json`.
 - **Three-section layout** — Active section (always visible, expanded rows with live status), Open section (scrollable, selected shows detail pane), Done/Untracked (toggled with `h`). Unified j/k navigation across all sections.
-- **AI status summaries** — periodic (every 2 min) haiku-generated one-line summaries for active sessions. Up to 5 displayed with fading colors (newest brightest). Content source: pane capture → JSONL conversation text fallback. `N` key triggers manually. Skips call if input unchanged. Logged to `~/.cache/ccs/naming.log`.
+- **AI status summaries** — periodic (every 2 min) haiku-generated one-line summaries for active sessions. Up to 3 displayed with fading colors (newest brightest). Active status lines are dynamically capped by `maxActiveStatusLines()` based on terminal height. Content source: pane capture → JSONL conversation text fallback. `N` key triggers manually. Skips call if input unchanged. Logged to `~/.cache/ccs/naming.log`.
 - **Transition summaries** — when session goes inactive, haiku condenses status history into a short name + comprehensive multi-line summary for the detail pane.
 - **Display name fallback** — manual name > auto name > /session-name > first user message title
 - **Attention states** — `DeriveStatus()` scans pane content bottom-up: waiting prompt, permission prompt, thinking/spinner, error, or fallback to last content line. Fast pattern matching (1s polling).
 - **Stable active ordering** — active sessions don't re-sort on refresh; only new sessions insert at top. Prevents cursor disorientation.
-- **Search rework** — `/` searches all sessions (any lifecycle state) + project directories at `~/Projects/`. Results show state badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` project dir.
+- **Search rework** — `/` searches all sessions (any lifecycle state) + project directories at `~/Projects/`. Fuzzy matches filtered by score > 0 (eliminates noise). Results have scroll windowing with position indicator. Project dirs shown first for quick new-session launch. Results show state badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` project dir.
 - **tmux-only mode** — auto-bootstraps into tmux. All sessions open as new tmux windows.
 - **Follow mode** — `f` key on active SourceTmux session enters split view with live pane capture.
 - **Live pane capture** — 1s polling. Captures all sessions with tmux windows. Persists after inactive (dimmed).
 - **Live activity monitoring** — fsnotify watches active JSONL files. 200ms debounce.
 - **PID-based tracking** — `~/.cache/ccs/active.json` maps session IDs to PIDs and tmux window IDs.
 - **JSONL parsing** streams line-by-line, never loads entire file into memory
-- **Detail pane** — 2-column layout: left = AI comprehensive summary, right = JSONL conversation text (human `›` + assistant `»`, no tool calls). Replaces old single-column activity view.
+- **Detail pane** — 2-column layout: left = AI comprehensive summary, right = JSONL conversation text. Right column: 2 sticky non-trivial (>20 char) user messages at top, then conversation tail (human `›` + assistant `»`, no tool calls). Text blocks collapsed to single lines. Right-side format: `time ctx%` with fixed-width fields for vertical alignment.
+- **Height budgeting** — `maxActiveStatusLines()` dynamically caps status lines per active session based on terminal height. `scrollWindow()` fixedOverhead = 8 (border 2, title 1, OPEN header+margin 2, scroll indicator 1, footer+margin 2). Prevents top-row clipping when many active sessions are running.
+- **Context window** — `maxContextTokens = 1000000` (Opus 4.6 1M context). Context % displayed right-aligned in fixed 4-char field.
 - **Known gap**: pane capture for inactive sessions doesn't persist across ccs restarts (only in-memory).
 - **Known gap**: pane capture frequently empty for active sessions (tracker doesn't always have tmux window IDs). JSONL conversation text fallback mitigates this.
 - **lipgloss `.Width()` includes padding** — must subtract padding for text width calculations.
+- **lipgloss doesn't clip content wider than `.Width()`** — all detail pane rows are hard-capped with `truncateToWidth(row, contentWidth)` to prevent border overflow.
 - **lipgloss background on pre-styled text doesn't work** — inner ANSI resets cancel outer background. Use cursor indicators (`▸`) instead of background highlighting.
 
 ## Key Bindings
