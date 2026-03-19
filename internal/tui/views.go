@@ -531,15 +531,39 @@ func (m Model) renderDetail(s types.Session) string {
 	}
 
 	// Right column: conversation text (human + assistant, no tool calls)
-	// › = user (dim cyan), » = assistant (dim text)
+	// Top: last 2 non-trivial user messages (sticky), then separator, then conversation tail
 	userPrefixStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("73"))
 	assistPrefixStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 	var rightLines []string
 	if s.FilePath != "" {
 		convText := activity.ExtractConversationText(s.FilePath, bodyHeight*6)
 		if convText != "" {
-			for _, cl := range strings.Split(convText, "\n") {
-				// Style the prefix character, keep the rest dim
+			rawLines := strings.Split(convText, "\n")
+
+			// Find last 2 non-trivial user messages (>20 chars after prefix)
+			var stickyRaw []string
+			for i := len(rawLines) - 1; i >= 0 && len(stickyRaw) < 2; i-- {
+				if strings.HasPrefix(rawLines[i], "› ") && len(rawLines[i]) > 22 {
+					stickyRaw = append([]string{rawLines[i]}, stickyRaw...)
+				}
+			}
+
+			// Style sticky user messages
+			for _, cl := range stickyRaw {
+				styled := userPrefixStyle.Render("›") + " " + dimStyle.Render(truncateToWidth(cl[len("› "):], rightColWidth-2))
+				rightLines = append(rightLines, styled)
+			}
+
+			// Separator between sticky and conversation tail
+			if len(stickyRaw) > 0 {
+				sep := dimStyle.Render(strings.Repeat("─", rightColWidth/2))
+				rightLines = append(rightLines, sep)
+			}
+
+			// Fill remaining rows with conversation tail
+			tailRows := bodyHeight - len(rightLines)
+			var tailLines []string
+			for _, cl := range rawLines {
 				if strings.HasPrefix(cl, "› ") {
 					cl = userPrefixStyle.Render("›") + " " + dimStyle.Render(truncateToWidth(cl[len("› "):], rightColWidth-2))
 				} else if strings.HasPrefix(cl, "» ") {
@@ -547,8 +571,12 @@ func (m Model) renderDetail(s types.Session) string {
 				} else {
 					cl = dimStyle.Render(truncateToWidth(cl, rightColWidth))
 				}
-				rightLines = append(rightLines, cl)
+				tailLines = append(tailLines, cl)
 			}
+			if len(tailLines) > tailRows {
+				tailLines = tailLines[len(tailLines)-tailRows:]
+			}
+			rightLines = append(rightLines, tailLines...)
 		}
 	}
 	if len(rightLines) == 0 {
@@ -559,9 +587,7 @@ func (m Model) renderDetail(s types.Session) string {
 	if len(leftLines) > bodyHeight {
 		leftLines = leftLines[len(leftLines)-bodyHeight:]
 	}
-	if len(rightLines) > bodyHeight {
-		rightLines = rightLines[len(rightLines)-bodyHeight:]
-	}
+	// rightLines is already sized to bodyHeight (sticky + separator + tail)
 
 	// Pad columns to equal height
 	for len(leftLines) < bodyHeight {
