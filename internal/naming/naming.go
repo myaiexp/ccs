@@ -89,9 +89,6 @@ func LogPath() string {
 
 // callHaiku sends a prompt to claude --print --model haiku and returns the response.
 func callHaiku(operation, sessionID, prompt string, timeout time.Duration) (string, error) {
-	LogEntry("CALL %s session=%s prompt_len=%d", operation, sessionID[:8], len(prompt))
-	LogEntry("PROMPT [%s %s]:\n%s", operation, sessionID[:8], truncateLog(prompt, 2000))
-
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -109,7 +106,7 @@ func callHaiku(operation, sessionID, prompt string, timeout time.Duration) (stri
 	}
 
 	result := strings.TrimSpace(string(out))
-	LogEntry("RESULT %s session=%s elapsed=%s response=%q", operation, sessionID[:8], elapsed, truncateLog(result, 500))
+	LogEntry("%s session=%s %.1fs → %q", operation, sessionID[:8], elapsed.Seconds(), truncateLog(result, 200))
 	return result, nil
 }
 
@@ -128,7 +125,6 @@ func GenerateStatus(sessionID, paneContent string, maxLines int) Result {
 	}
 	content := strings.Join(lines, "\n")
 	if strings.TrimSpace(content) == "" {
-		LogEntry("SKIP status session=%s reason=empty_content", sessionID[:8])
 		return Result{SessionID: sessionID}
 	}
 
@@ -140,7 +136,6 @@ func GenerateStatus(sessionID, paneContent string, maxLines int) Result {
 
 	name := parseResponse(raw)
 	if name == "" {
-		LogEntry("SKIP status session=%s reason=haiku_returned_skip", sessionID[:8])
 	}
 	return Result{SessionID: sessionID, Name: name}
 }
@@ -148,7 +143,6 @@ func GenerateStatus(sessionID, paneContent string, maxLines int) Result {
 // CondenseName produces a short name from a list of status update texts.
 func CondenseName(sessionID string, statusTexts []string) Result {
 	if len(statusTexts) == 0 {
-		LogEntry("SKIP condense session=%s reason=no_status_texts", sessionID[:8])
 		return Result{SessionID: sessionID}
 	}
 
@@ -170,7 +164,6 @@ func CondenseName(sessionID string, statusTexts []string) Result {
 // GenerateComprehensiveSummary produces a multi-line summary from all status updates.
 func GenerateComprehensiveSummary(sessionID string, statusTexts []string) SummaryResult {
 	if len(statusTexts) == 0 {
-		LogEntry("SKIP comprehensive session=%s reason=no_status_texts", sessionID[:8])
 		return SummaryResult{SessionID: sessionID}
 	}
 
@@ -187,7 +180,6 @@ func GenerateComprehensiveSummary(sessionID string, statusTexts []string) Summar
 
 	summary := strings.TrimSpace(raw)
 	if summary == "" || strings.EqualFold(summary, "SKIP") {
-		LogEntry("SKIP comprehensive session=%s reason=empty_or_skip", sessionID[:8])
 		return SummaryResult{SessionID: sessionID}
 	}
 	return SummaryResult{SessionID: sessionID, Summary: summary}
@@ -202,7 +194,6 @@ func GenerateName(sessionID, contextText string, maxLines int) Result {
 	}
 	content := strings.Join(lines, "\n")
 	if strings.TrimSpace(content) == "" {
-		LogEntry("SKIP name session=%s reason=empty_content", sessionID[:8])
 		return Result{SessionID: sessionID}
 	}
 

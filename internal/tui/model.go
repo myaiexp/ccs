@@ -249,7 +249,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		naming.LogEntry("TICK active=%d with_content=%d new_content=%d dispatching=%d", activeCount, contentCount, newCount, len(cmds))
+		if newCount > 0 {
+			naming.LogEntry("TICK dispatching=%d (active=%d)", newCount, activeCount)
+		}
 		cmds = append(cmds, statusSummaryTickCmd())
 		return m, tea.Batch(cmds...)
 
