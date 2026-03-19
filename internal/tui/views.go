@@ -548,16 +548,11 @@ func (m Model) renderDetail(s types.Session) string {
 				}
 			}
 
-			// Style sticky user messages
+			// Style sticky user messages (slightly dimmer than conversation)
+			stickyTextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 			for _, cl := range stickyRaw {
-				styled := userPrefixStyle.Render("›") + " " + dimStyle.Render(truncateToWidth(cl[len("› "):], rightColWidth-2))
+				styled := userPrefixStyle.Render("›") + " " + stickyTextStyle.Render(truncateToWidth(cl[len("› "):], rightColWidth-2))
 				rightLines = append(rightLines, styled)
-			}
-
-			// Separator between sticky and conversation tail
-			if len(stickyRaw) > 0 {
-				sep := dimStyle.Render(strings.Repeat("─", rightColWidth/2))
-				rightLines = append(rightLines, sep)
 			}
 
 			// Fill remaining rows with conversation tail
