@@ -172,6 +172,88 @@ func TestTracker_MatchNewSession_MostRecentWins(t *testing.T) {
 	}
 }
 
+func TestTracker_DetectSessionSwitch(t *testing.T) {
+	// Set up a temp dir simulating ~/.claude/projects/{encoded-dir}/
+	dir := t.TempDir()
+
+	// Create "old" JSONL file with stale mtime (60s ago)
+	oldFile := dir + "/old-session.jsonl"
+	os.WriteFile(oldFile, []byte(`{"type":"user"}`), 0644)
+	staleTime := time.Now().Add(-60 * time.Second)
+	os.Chtimes(oldFile, staleTime, staleTime)
+
+	// Create "new" JSONL file with recent mtime
+	newFile := dir + "/new-session.jsonl"
+	os.WriteFile(newFile, []byte(`{"type":"user"}`), 0644)
+
+	tracker := &Tracker{path: "/dev/null"}
+	tracker.Sessions = []TrackedSession{
+		{SessionID: "old-session", ProjectDir: "/proj", PID: os.Getpid()},
+	}
+
+	sessions := []types.Session{
+		{ID: "old-session", FilePath: oldFile},
+	}
+
+	tracker.DetectSessionSwitch(sessions)
+
+	if tracker.Sessions[0].SessionID != "" {
+		t.Errorf("expected session ID cleared, got %q", tracker.Sessions[0].SessionID)
+	}
+}
+
+func TestTracker_DetectSessionSwitch_RecentNotCleared(t *testing.T) {
+	// If the JSONL was modified recently, don't clear even if newer files exist
+	dir := t.TempDir()
+
+	oldFile := dir + "/active-session.jsonl"
+	os.WriteFile(oldFile, []byte(`{"type":"user"}`), 0644)
+	// mtime is now (recent) — don't touch it
+
+	newFile := dir + "/other-session.jsonl"
+	os.WriteFile(newFile, []byte(`{"type":"user"}`), 0644)
+
+	tracker := &Tracker{path: "/dev/null"}
+	tracker.Sessions = []TrackedSession{
+		{SessionID: "active-session", ProjectDir: "/proj", PID: os.Getpid()},
+	}
+
+	sessions := []types.Session{
+		{ID: "active-session", FilePath: oldFile},
+	}
+
+	tracker.DetectSessionSwitch(sessions)
+
+	if tracker.Sessions[0].SessionID != "active-session" {
+		t.Error("should NOT clear session ID when JSONL was recently modified")
+	}
+}
+
+func TestTracker_DetectSessionSwitch_NoNewerFile(t *testing.T) {
+	// Stale JSONL but no newer file — don't clear (Claude just thinking)
+	dir := t.TempDir()
+
+	oldFile := dir + "/only-session.jsonl"
+	os.WriteFile(oldFile, []byte(`{"type":"user"}`), 0644)
+	staleTime := time.Now().Add(-60 * time.Second)
+	os.Chtimes(oldFile, staleTime, staleTime)
+
+	tracker := &Tracker{path: "/dev/null"}
+	tracker.Sessions = []TrackedSession{
+		{SessionID: "only-session", ProjectDir: "/proj", PID: os.Getpid()},
+	}
+
+	sessions := []types.Session{
+		{ID: "only-session", FilePath: oldFile},
+	}
+
+	tracker.DetectSessionSwitch(sessions)
+
+	if tracker.Sessions[0].SessionID != "only-session" {
+		t.Error("should NOT clear when no newer JSONL exists")
+	}
+}
+
 func TestTracker_MatchNewSession_NoDoubleClaim(t *testing.T) {
 	// Two tracked processes — each should get a different session
 	now := time.Now()

@@ -378,6 +378,7 @@ func LoadSessions(projectsDir string, tracker *Tracker) ([]types.Session, error)
 		return nil, err
 	}
 	tracker.Refresh()
+	tracker.DetectSessionSwitch(sessions)
 	tracker.MatchNewSession(sessions)
 	tracker.MarkActive(sessions)
 	return sessions, nil

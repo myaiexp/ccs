@@ -234,6 +234,68 @@ func (t *Tracker) SetTmuxWindow(sessionID, windowID string) {
 	}
 }
 
+// DetectSessionSwitch detects when a tracked PID has switched to a new session
+// (e.g. via /new in Claude Code). If the tracked session's JSONL is stale
+// (not written to recently) but the PID is alive and a newer JSONL exists in
+// the same project dir, clears the session ID so MatchNewSession can reassign.
+func (t *Tracker) DetectSessionSwitch(sessions []types.Session) {
+	sessMap := make(map[string]types.Session)
+	for _, s := range sessions {
+		sessMap[s.ID] = s
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	changed := false
+	now := time.Now()
+
+	for i := range t.Sessions {
+		ts := &t.Sessions[i]
+		if ts.SessionID == "" || !processAlive(ts.PID) {
+			continue
+		}
+
+		sess, ok := sessMap[ts.SessionID]
+		if !ok || sess.FilePath == "" {
+			continue
+		}
+
+		// Skip if JSONL was modified recently — session is still active
+		info, err := os.Stat(sess.FilePath)
+		if err != nil || now.Sub(info.ModTime()) < 30*time.Second {
+			continue
+		}
+
+		// Stale JSONL with alive PID — check for a newer JSONL in same dir
+		dir := filepath.Dir(sess.FilePath)
+		trackedName := filepath.Base(sess.FilePath)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") || entry.Name() == trackedName {
+				continue
+			}
+			eInfo, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if eInfo.ModTime().After(info.ModTime()) {
+				ts.SessionID = ""
+				changed = true
+				break
+			}
+		}
+	}
+
+	if changed {
+		t.save()
+	}
+}
+
 // MatchNewSession tries to match tracked entries (PIDs without session IDs)
 // to sessions. For each unmatched tracked entry, finds the most recently
 // created session in the same project dir that was created after the process

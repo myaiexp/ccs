@@ -56,7 +56,7 @@ go test ./... -count=1          # tests for all packages
 - **Follow mode** — `f` key on active SourceTmux session enters split view with live pane capture.
 - **Live pane capture** — 1s polling. Captures all sessions with tmux windows. Persists after inactive (dimmed).
 - **Live activity monitoring** — fsnotify watches active JSONL files. 200ms debounce.
-- **PID-based tracking** — `~/.cache/ccs/active.json` maps session IDs to PIDs and tmux window IDs.
+- **PID-based tracking** — `~/.cache/ccs/active.json` maps session IDs to PIDs and tmux window IDs. Detects `/new` (same PID, new session) via stale JSONL + newer file heuristic (30s threshold).
 - **JSONL parsing** streams line-by-line, never loads entire file into memory
 - **Detail pane** — 2-column layout: left = AI comprehensive summary, right = JSONL conversation text. Right column: 2 sticky non-trivial (>20 char) user messages at top, then conversation tail (human `›` + assistant `»`, no tool calls). Text blocks collapsed to single lines. Right-side format: `time ctx%` with fixed-width fields for vertical alignment.
 - **Height budgeting** — `maxActiveStatusLines()` dynamically caps status lines per active session based on terminal height. `scrollWindow()` fixedOverhead = 8 (border 2, title 1, OPEN header+margin 2, scroll indicator 1, footer+margin 2). Prevents top-row clipping when many active sessions are running.
