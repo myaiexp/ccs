@@ -51,7 +51,7 @@ go test ./... -count=1          # tests for all packages
 - **Display name fallback** — manual name > auto name > /session-name > first user message title
 - **Attention states** — `DeriveStatus()` scans pane content bottom-up: waiting prompt, permission prompt, thinking/spinner, error, or fallback to last content line. Fast pattern matching (1s polling).
 - **Stable active ordering** — active sessions don't re-sort on refresh; only new sessions insert at top. Prevents cursor disorientation.
-- **Search rework** — `/` searches all sessions (any lifecycle state) + project directories at `~/Projects/`. Fuzzy matches filtered by score > 0 (eliminates noise). Results have scroll windowing with position indicator. Project dirs shown first for quick new-session launch. Results show state badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` project dir.
+- **Search rework** — `/` searches all sessions (any lifecycle state) + project directories at `~/Projects/`. Fuzzy matches filtered by score > 0 (eliminates noise). Results have scroll windowing with position indicator. Project dirs shown first, then sessions sorted by state priority (active > open > rest) then recency. Results show state badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` project dir. All typed characters go to input (no shortcut interception in search mode).
 - **tmux-only mode** — auto-bootstraps into tmux. All sessions open as new tmux windows.
 - **Follow mode** — `f` key on active SourceTmux session enters split view with live pane capture.
 - **Live pane capture** — 1s polling. Captures all sessions with tmux windows. Persists after inactive (dimmed).
