@@ -179,7 +179,7 @@ func TestTracker_DetectSessionSwitch(t *testing.T) {
 	// Create "old" JSONL file with stale mtime (60s ago)
 	oldFile := dir + "/old-session.jsonl"
 	os.WriteFile(oldFile, []byte(`{"type":"user"}`), 0644)
-	staleTime := time.Now().Add(-60 * time.Second)
+	staleTime := time.Now().Add(-10 * time.Second)
 	os.Chtimes(oldFile, staleTime, staleTime)
 
 	// Create "new" JSONL file with recent mtime
@@ -235,7 +235,7 @@ func TestTracker_DetectSessionSwitch_NoNewerFile(t *testing.T) {
 
 	oldFile := dir + "/only-session.jsonl"
 	os.WriteFile(oldFile, []byte(`{"type":"user"}`), 0644)
-	staleTime := time.Now().Add(-60 * time.Second)
+	staleTime := time.Now().Add(-10 * time.Second)
 	os.Chtimes(oldFile, staleTime, staleTime)
 
 	tracker := &Tracker{path: "/dev/null"}

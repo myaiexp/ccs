@@ -263,7 +263,7 @@ func (t *Tracker) DetectSessionSwitch(sessions []types.Session) {
 
 		// Skip if JSONL was modified recently — session is still active
 		info, err := os.Stat(sess.FilePath)
-		if err != nil || now.Sub(info.ModTime()) < 30*time.Second {
+		if err != nil || now.Sub(info.ModTime()) < 5*time.Second {
 			continue
 		}
 

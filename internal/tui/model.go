@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ type PaneCaptureMsg struct {
 	Snapshot capture.PaneSnapshot
 	Err      error
 }
+
+// DirChangeMsg signals that a new JSONL file appeared in a watched project dir.
+type DirChangeMsg struct{}
 
 // PaneCaptureTickMsg triggers periodic pane capture polling.
 type PaneCaptureTickMsg struct{}
@@ -153,12 +157,18 @@ func (m Model) Init() tea.Cmd {
 
 	if m.watcher != nil {
 		go m.watcher.Run()
-		cmds = append(cmds, watchCmd(m.watcher))
+		cmds = append(cmds, watchCmd(m.watcher), dirWatchCmd(m.watcher))
 
-		// Watch all currently-active sessions
+		// Watch all currently-active sessions + their parent dirs
+		watchedDirs := make(map[string]bool)
 		for _, s := range m.sessions {
 			if s.StateStatus == types.StatusActive && s.FilePath != "" {
 				_ = m.watcher.Watch(s.ID, s.FilePath)
+				dir := filepath.Dir(s.FilePath)
+				if !watchedDirs[dir] {
+					_ = m.watcher.WatchDir(dir)
+					watchedDirs[dir] = true
+				}
 			}
 		}
 	}
@@ -191,6 +201,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, watchCmd(m.watcher)
 		}
 		return m, nil
+
+	case DirChangeMsg:
+		cmd := m.handleRefresh()
+		var cmds []tea.Cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if m.watcher != nil {
+			cmds = append(cmds, dirWatchCmd(m.watcher))
+		}
+		return m, tea.Batch(cmds...)
 
 	case PaneCaptureMsg:
 		if msg.Err == nil {
@@ -1090,7 +1111,7 @@ func refreshCmd() tea.Cmd {
 }
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(10*time.Second, func(time.Time) tea.Msg {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 		return TickMsg{}
 	})
 }
@@ -1105,6 +1126,16 @@ func watchCmd(w *watcher.Watcher) tea.Cmd {
 			SessionID: update.SessionID,
 			Entries:   update.Entries,
 		}
+	}
+}
+
+func dirWatchCmd(w *watcher.Watcher) tea.Cmd {
+	return func() tea.Msg {
+		_, ok := <-w.DirEvents()
+		if !ok {
+			return nil
+		}
+		return DirChangeMsg{}
 	}
 }
 
@@ -1175,7 +1206,7 @@ func (m *Model) scheduleNamingTriggers(newActiveIDs map[string]bool, justPromote
 	return cmds
 }
 
-// syncWatcher adds/removes watched files to match the current active session set.
+// syncWatcher adds/removes watched files and directories to match the current active session set.
 func (m *Model) syncWatcher(sessions []types.Session) {
 	if m.watcher == nil {
 		return
@@ -1202,6 +1233,26 @@ func (m *Model) syncWatcher(sessions []types.Session) {
 	for id, path := range oldActive {
 		if _, is := newActive[id]; !is {
 			m.watcher.Unwatch(path)
+		}
+	}
+
+	// Sync dir watches: watch parent dirs of active session files
+	newDirs := make(map[string]bool)
+	for _, path := range newActive {
+		newDirs[filepath.Dir(path)] = true
+	}
+	oldDirs := make(map[string]bool)
+	for _, path := range oldActive {
+		oldDirs[filepath.Dir(path)] = true
+	}
+	for dir := range newDirs {
+		if !oldDirs[dir] {
+			_ = m.watcher.WatchDir(dir)
+		}
+	}
+	for dir := range oldDirs {
+		if !newDirs[dir] {
+			m.watcher.UnwatchDir(dir)
 		}
 	}
 }

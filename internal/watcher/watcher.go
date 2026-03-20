@@ -3,6 +3,8 @@ package watcher
 import (
 	"ccs/internal/activity"
 	"log"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,12 +24,15 @@ type watchedFile struct {
 }
 
 // Watcher monitors JSONL session files for changes and sends parsed
-// activity updates on a channel.
+// activity updates on a channel. Also watches project directories for
+// new JSONL files (detects /new session switches).
 type Watcher struct {
 	fw            *fsnotify.Watcher
 	watched       map[string]watchedFile // filePath → watchedFile
+	watchedDirs   map[string]bool        // dirPath → true
 	mu            sync.Mutex
 	updates       chan ActivityUpdate
+	dirEvents     chan string // dir path where new .jsonl appeared
 	activityLines int
 	done          chan struct{}
 	stopped       chan struct{} // closed by Run() when it exits
@@ -45,7 +50,9 @@ func New(activityLines int) (*Watcher, error) {
 	return &Watcher{
 		fw:            fw,
 		watched:       make(map[string]watchedFile),
+		watchedDirs:   make(map[string]bool),
 		updates:       make(chan ActivityUpdate, 100),
+		dirEvents:     make(chan string, 50),
 		activityLines: activityLines,
 		done:          make(chan struct{}),
 		stopped:       make(chan struct{}),
@@ -70,6 +77,39 @@ func (w *Watcher) Watch(sessionID, filePath string) error {
 	return nil
 }
 
+// WatchDir starts monitoring a directory for new JSONL files.
+func (w *Watcher) WatchDir(dirPath string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.watchedDirs[dirPath] {
+		return nil
+	}
+
+	if err := w.fw.Add(dirPath); err != nil {
+		return err
+	}
+	w.watchedDirs[dirPath] = true
+	return nil
+}
+
+// UnwatchDir stops monitoring a directory.
+func (w *Watcher) UnwatchDir(dirPath string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if !w.watchedDirs[dirPath] {
+		return
+	}
+	_ = w.fw.Remove(dirPath)
+	delete(w.watchedDirs, dirPath)
+}
+
+// DirEvents returns a read-only channel signaling new JSONL files in watched dirs.
+func (w *Watcher) DirEvents() <-chan string {
+	return w.dirEvents
+}
+
 // Unwatch stops monitoring a file path.
 func (w *Watcher) Unwatch(filePath string) {
 	w.mu.Lock()
@@ -82,7 +122,7 @@ func (w *Watcher) Unwatch(filePath string) {
 	delete(w.watched, filePath)
 }
 
-// UnwatchAll removes all watched file paths.
+// UnwatchAll removes all watched file paths and directories.
 func (w *Watcher) UnwatchAll() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -91,6 +131,11 @@ func (w *Watcher) UnwatchAll() {
 		_ = w.fw.Remove(fp)
 	}
 	w.watched = make(map[string]watchedFile)
+
+	for dp := range w.watchedDirs {
+		_ = w.fw.Remove(dp)
+	}
+	w.watchedDirs = make(map[string]bool)
 }
 
 // Updates returns a read-only channel of ActivityUpdate messages.
@@ -122,39 +167,50 @@ func (w *Watcher) Run() {
 			if !ok {
 				return
 			}
-			if !event.Has(fsnotify.Write) {
-				continue
-			}
 
 			filePath := event.Name
 
-			w.mu.Lock()
-			wf, exists := w.watched[filePath]
-			lines := w.activityLines
-			w.mu.Unlock()
+			// File WRITE → activity update for watched session files
+			if event.Has(fsnotify.Write) {
+				w.mu.Lock()
+				wf, exists := w.watched[filePath]
+				lines := w.activityLines
+				w.mu.Unlock()
 
-			if !exists {
-				continue
+				if exists {
+					sid := wf.sessionID
+					if t, ok := timers[filePath]; ok {
+						t.Stop()
+					}
+					timers[filePath] = time.AfterFunc(debounceInterval, func() {
+						entries := activity.TailFile(filePath, lines)
+						update := ActivityUpdate{
+							SessionID: sid,
+							FilePath:  filePath,
+							Entries:   entries,
+						}
+						select {
+						case w.updates <- update:
+						case <-w.done:
+						}
+					})
+				}
 			}
 
-			sid := wf.sessionID
+			// File CREATE in watched dir → new session signal
+			if event.Has(fsnotify.Create) && strings.HasSuffix(filePath, ".jsonl") {
+				dir := filepath.Dir(filePath)
+				w.mu.Lock()
+				isWatchedDir := w.watchedDirs[dir]
+				w.mu.Unlock()
 
-			// Debounce: reset timer for this file path.
-			if t, ok := timers[filePath]; ok {
-				t.Stop()
+				if isWatchedDir {
+					select {
+					case w.dirEvents <- dir:
+					case <-w.done:
+					}
+				}
 			}
-			timers[filePath] = time.AfterFunc(debounceInterval, func() {
-				entries := activity.TailFile(filePath, lines)
-				update := ActivityUpdate{
-					SessionID: sid,
-					FilePath:  filePath,
-					Entries:   entries,
-				}
-				select {
-				case w.updates <- update:
-				case <-w.done:
-				}
-			})
 
 		case err, ok := <-w.fw.Errors:
 			if !ok {
@@ -170,11 +226,12 @@ func (w *Watcher) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)
 		_ = w.fw.Close()
-		// Wait for Run() to exit before closing the updates channel.
+		// Wait for Run() to exit before closing the channels.
 		// Run() is the only sender, so this is safe once it has stopped.
 		go func() {
 			<-w.stopped
 			close(w.updates)
+			close(w.dirEvents)
 		}()
 	})
 }
