@@ -41,28 +41,13 @@ func (m Model) View() string {
 	if m.filtering && len(m.searchResults) > 0 {
 		nResults := len(m.searchResults)
 		// Fixed overhead: header(1) + footer(1) + border(2) + count line(1)
-		availHeight := m.height - 5
-		if availHeight < 3 {
-			availHeight = 3
-		}
-		maxRows := availHeight
-		if maxRows > nResults {
-			maxRows = nResults
-		}
+		availHeight := max(m.height-5, 3)
+		maxRows := min(availHeight, nResults)
 
 		// Center scroll window around searchIdx
 		half := maxRows / 2
-		start := m.searchIdx - half
-		if start < 0 {
-			start = 0
-		}
-		if start > nResults-maxRows {
-			start = max(0, nResults-maxRows)
-		}
-		end := start + maxRows
-		if end > nResults {
-			end = nResults
-		}
+		start := max(0, min(m.searchIdx-half, nResults-maxRows))
+		end := min(start+maxRows, nResults)
 
 		countLine := dimStyle.Render(fmt.Sprintf("  %d results", nResults))
 		if nResults > maxRows {
@@ -117,10 +102,7 @@ func (m Model) View() string {
 			}
 		}
 		if len(openList) > (end - start) {
-			openIdx := m.sessionIdx - nActive
-			if openIdx < 0 {
-				openIdx = 0
-			}
+			openIdx := max(0, m.sessionIdx-nActive)
 			indicator := dimStyle.Render(fmt.Sprintf("  ── %d/%d ──", openIdx+1, len(openList)))
 			sections = append(sections, indicator)
 		}
@@ -206,28 +188,12 @@ func (m Model) renderFollowView() string {
 	sections = append(sections, sessHeader)
 
 	topRows := (m.height * 40 / 100) - 4
-	if topRows < 3 {
-		topRows = 3
-	}
-	if topRows > 8 {
-		topRows = 8
-	}
-	if topRows > len(m.filtered) {
-		topRows = len(m.filtered)
-	}
+	topRows = max(topRows, 3)
+	topRows = min(topRows, 8, len(m.filtered))
 
 	half := topRows / 2
-	start := m.sessionIdx - half
-	if start < 0 {
-		start = 0
-	}
-	if start > len(m.filtered)-topRows {
-		start = max(0, len(m.filtered)-topRows)
-	}
-	end := start + topRows
-	if end > len(m.filtered) {
-		end = len(m.filtered)
-	}
+	start := max(0, min(m.sessionIdx-half, len(m.filtered)-topRows))
+	end := min(start+topRows, len(m.filtered))
 
 	if len(m.filtered) == 0 {
 		sections = append(sections, dimStyle.Render("  no sessions"))
@@ -247,10 +213,7 @@ func (m Model) renderFollowView() string {
 		}
 	}
 
-	contentWidth := m.width - 6
-	if contentWidth < 40 {
-		contentWidth = 40
-	}
+	contentWidth := max(m.width-6, 40)
 	paneWidth := contentWidth - 2
 
 	paneTitle := "Following: "
@@ -267,10 +230,7 @@ func (m Model) renderFollowView() string {
 	paneText := dimStyle.Render("Waiting for capture...")
 	if snap, ok := m.paneContent[m.followID]; ok && snap.Content != "" {
 		paneLines := strings.Split(snap.Content, "\n")
-		availPaneRows := m.height - len(sections) - 6
-		if availPaneRows < 3 {
-			availPaneRows = 3
-		}
+		availPaneRows := max(m.height-len(sections)-6, 3)
 		if len(paneLines) > availPaneRows {
 			paneLines = paneLines[len(paneLines)-availPaneRows:]
 		}
@@ -337,10 +297,7 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 	if status != "" {
 		leftParts += "  " + status
 	}
-	gap := contentWidth - lipgloss.Width(leftParts) - rightWidth
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(contentWidth-lipgloss.Width(leftParts)-rightWidth, 1)
 	headerLine := leftParts + strings.Repeat(" ", gap) + rightSide
 
 	var lines []string
@@ -399,17 +356,11 @@ func (m Model) renderOpenRow(visNum int, s types.Session) string {
 	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
 	leftFixed := 7 + lipgloss.Width(projName) + 2 // badge+space+num+space + proj + gap
-	maxName := contentWidth - leftFixed - rightWidth - 2
-	if maxName < 10 {
-		maxName = 10
-	}
+	maxName := max(contentWidth-leftFixed-rightWidth-2, 10)
 	name = truncateToWidth(name, maxName)
 
 	leftSide := fmt.Sprintf("%s %s %s  %s", badge, num, projName, name)
-	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(contentWidth-lipgloss.Width(leftSide)-rightWidth, 1)
 	return leftSide + strings.Repeat(" ", gap) + rightSide
 }
 
@@ -436,47 +387,29 @@ func (m Model) renderDoneRow(badge string, s types.Session, isSelected bool) str
 	timeStr := dimStyle.Render(formatDuration(s.LastActive))
 
 	leftFixed := 6 + lipgloss.Width(projName) + 2
-	maxName := contentWidth - leftFixed - lipgloss.Width(timeStr) - 2
-	if maxName < 10 {
-		maxName = 10
-	}
+	maxName := max(contentWidth-leftFixed-lipgloss.Width(timeStr)-2, 10)
 	name = truncateToWidth(name, maxName)
 
 	line := fmt.Sprintf("%s%s  %s  %s", cursor, badgeRendered, dimStyle.Render(projName), dimStyle.Render(name))
-	gap := contentWidth - lipgloss.Width(line) - lipgloss.Width(timeStr)
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(contentWidth-lipgloss.Width(line)-lipgloss.Width(timeStr), 1)
 	line += strings.Repeat(" ", gap) + timeStr
 
 	return line
 }
 
 func (m Model) renderDetail(s types.Session) string {
-	detailWidth := m.width - 6
-	contentWidth := detailWidth
-	if detailWidth < 40 {
-		detailWidth = 40
-	}
-	if contentWidth < 38 {
-		contentWidth = 38
-	}
+	detailWidth := max(m.width-6, 40)
+	contentWidth := max(detailWidth, 38)
 
 	// Header: project name + display name + ctx% + time
 	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
 	projPart := detailValueStyle.Render(s.ProjectName) + "  "
 	name := m.displayName(s)
-	maxNameWidth := contentWidth - lipgloss.Width(projPart) - rightWidth - 2
-	if maxNameWidth < 10 {
-		maxNameWidth = 10
-	}
+	maxNameWidth := max(contentWidth-lipgloss.Width(projPart)-rightWidth-2, 10)
 	nameStr := truncateToWidth(name, maxNameWidth)
 	leftSide := projPart + detailValueStyle.Render(nameStr)
-	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(contentWidth-lipgloss.Width(leftSide)-rightWidth, 1)
 	headerLine := leftSide + strings.Repeat(" ", gap) + rightSide
 
 	// Info line: path + stats
@@ -484,18 +417,12 @@ func (m Model) renderDetail(s types.Session) string {
 	dirWithSession := s.ProjectDir + "/" + s.ID
 	msgsPart := "  " + detailValueStyle.Render(fmt.Sprintf("%d", s.MsgCount)) + detailLabelStyle.Render(" msgs") + "  " + detailValueStyle.Render(sizeStr)
 	msgsWidth := lipgloss.Width(msgsPart)
-	maxDirWidth := contentWidth - msgsWidth
-	if maxDirWidth < 10 {
-		maxDirWidth = 10
-	}
+	maxDirWidth := max(contentWidth-msgsWidth, 10)
 	dirWithSession = truncateToWidth(dirWithSession, maxDirWidth)
 	infoLine := dimStyle.Render(dirWithSession) + msgsPart
 
 	// Two-column body: left = AI summary, right = conversation text (no tool calls)
-	bodyHeight := m.detailBodyRows()
-	if bodyHeight < 3 {
-		bodyHeight = 3
-	}
+	bodyHeight := max(m.detailBodyRows(), 3)
 	colGap := 3
 	leftColWidth := (contentWidth - colGap) / 2
 	rightColWidth := contentWidth - leftColWidth - colGap
@@ -582,10 +509,7 @@ func (m Model) renderDetail(s types.Session) string {
 		left := truncateToWidth(leftLines[i], leftColWidth)
 		right := truncateToWidth(rightLines[i], rightColWidth)
 		// Pad left to fixed width
-		leftPad := leftColWidth - lipgloss.Width(left)
-		if leftPad < 0 {
-			leftPad = 0
-		}
+		leftPad := max(0, leftColWidth-lipgloss.Width(left))
 		row := left + strings.Repeat(" ", leftPad) + divider + right
 		// Hard cap: ensure no row exceeds content width (ANSI codes can cause miscalculation)
 		row = truncateToWidth(row, contentWidth)
@@ -657,10 +581,7 @@ func (m Model) renderFooter() string {
 	right := footerStyle.Render(strings.Join(hints, "  "))
 
 	if left != "" {
-		gap := m.width - 4 - lipgloss.Width(left) - lipgloss.Width(right)
-		if gap < 2 {
-			gap = 2
-		}
+		gap := max(m.width-4-lipgloss.Width(left)-lipgloss.Width(right), 2)
 		return lipgloss.NewStyle().MarginTop(1).Render(left + strings.Repeat(" ", gap) + right)
 	}
 	return footerStyle.Render(strings.Join(hints, "  "))
@@ -782,10 +703,7 @@ func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
 
 	rightWidth := lipgloss.Width(rightSide)
 	leftFixed := 3 + lipgloss.Width(projName) + 2 // badge+space + proj + gap
-	maxName := contentWidth - leftFixed - rightWidth - 2
-	if maxName < 10 {
-		maxName = 10
-	}
+	maxName := max(contentWidth-leftFixed-rightWidth-2, 10)
 	name = truncateToWidth(name, maxName)
 
 	cursor := "  "
@@ -794,10 +712,7 @@ func (m Model) renderSearchResult(r SearchResult, isSelected bool) string {
 	}
 
 	leftSide := fmt.Sprintf("%s%s %s  %s", cursor, badge, projName, name)
-	gap := contentWidth - lipgloss.Width(leftSide) - rightWidth
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(contentWidth-lipgloss.Width(leftSide)-rightWidth, 1)
 	line := leftSide + strings.Repeat(" ", gap) + rightSide
 
 	return line

@@ -899,9 +899,7 @@ func (m *Model) maxActiveStatusLines() int {
 	}
 
 	perSession := avail / nActive
-	if perSession > 3 {
-		perSession = 3
-	}
+	perSession = min(perSession, 3)
 	return perSession
 }
 
@@ -912,20 +910,12 @@ func (m *Model) activeRowLines(s types.Session) int {
 	history := m.state.StatusHistory(s.ID)
 	if len(history) > 0 {
 		n := len(history)
-		if n > maxStatus {
-			n = maxStatus
-		}
+		n = min(n, maxStatus)
 		lines += n
 	} else if maxStatus > 0 {
 		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
 			paneLines := strings.Split(snap.Content, "\n")
-			n := 2
-			if n > maxStatus {
-				n = maxStatus
-			}
-			if len(paneLines) < n {
-				n = len(paneLines)
-			}
+			n := min(2, maxStatus, len(paneLines))
 			lines += n
 		}
 	}
@@ -963,31 +953,16 @@ func (m *Model) scrollWindow() (int, int) {
 
 	availHeight := m.height - fixedOverhead
 	maxRows := availHeight
-	if maxRows < 0 {
-		maxRows = 0
-	}
-	if maxRows > nOpen {
-		maxRows = nOpen
-	}
+	maxRows = max(0, maxRows)
+	maxRows = min(maxRows, nOpen)
 
 	// sessionIdx relative to open section
-	openIdx := m.sessionIdx - nActive
-	if openIdx < 0 {
-		openIdx = 0
-	}
+	openIdx := max(0, m.sessionIdx-nActive)
 
 	half := maxRows / 2
-	start := openIdx - half
-	if start < 0 {
-		start = 0
-	}
-	if start > nOpen-maxRows {
-		start = max(0, nOpen-maxRows)
-	}
+	start := max(0, min(openIdx-half, nOpen-maxRows))
 	end := start + maxRows
-	if end > nOpen {
-		end = nOpen
-	}
+	end = min(end, nOpen)
 	return start, end
 }
 
