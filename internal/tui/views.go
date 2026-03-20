@@ -366,23 +366,6 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 			text := truncateToWidth(entry.Text, contentWidth-6)
 			lines = append(lines, "      "+style.Render(text))
 		}
-	} else if maxShow > 0 {
-		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-			paneLines := strings.Split(snap.Content, "\n")
-			n := 2
-			if n > maxShow {
-				n = maxShow
-			}
-			if len(paneLines) < n {
-				n = len(paneLines)
-			}
-			for _, pl := range paneLines[len(paneLines)-n:] {
-				pl = truncateToWidth(strings.TrimSpace(pl), contentWidth-6)
-				if pl != "" {
-					lines = append(lines, "      "+dimStyle.Render(pl))
-				}
-			}
-		}
 	}
 
 	return strings.Join(lines, "\n")

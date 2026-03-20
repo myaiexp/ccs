@@ -341,32 +341,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.searchIdx++
 			}
 			return m, nil
-		case "c":
-			// Complete in search mode
-			if m.searchIdx < len(m.searchResults) {
-				r := m.searchResults[m.searchIdx]
-				if r.Session != nil {
-					if r.Session.StateStatus == types.StatusActive {
-						m.errMsg = "Session still running — complete after it ends"
-					} else if r.Session.StateStatus != types.StatusDone {
-						m.state.MarkDone(r.Session.ID)
-						computeStateStatuses(m.sessions, m.tracker, m.state)
-						m.applyFilter()
-					}
-				}
-			}
-			return m, nil
-		case "o":
-			// Reopen in search mode
-			if m.searchIdx < len(m.searchResults) {
-				r := m.searchResults[m.searchIdx]
-				if r.Session != nil && r.Session.StateStatus == types.StatusDone {
-					m.state.Reopen(r.Session.ID)
-					computeStateStatuses(m.sessions, m.tracker, m.state)
-					m.applyFilter()
-				}
-			}
-			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.filter, cmd = m.filter.Update(msg)
