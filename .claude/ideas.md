@@ -58,5 +58,84 @@ DeriveStatus already detects waiting/permission/thinking/error states, but they 
 ### In-progress AI summary for open sessions
 Currently the comprehensive summary only generates on transition (active → open). Open sessions that were active before ccs started have no summary. Could generate a summary retroactively from JSONL conversation text when an open session is selected and has no summary yet.
 
+## 2026-03-20 — Tmux Integration: Brainstorm Exhaustively
+
+CCS already lives inside tmux and uses it for launching/switching sessions. This idea is about going much deeper — making tmux the primary event bus for CCS reactivity, replacing polling with tmux hooks and leveraging tmux features that are currently untapped.
+
+**Brainstorm this topic completely, exhaustively, thoroughly.** Cover every tmux feature, hook, and capability that could improve CCS. Consider: hooks, control mode, formats, alerts, signals, layout management, popup/overlay windows, custom key tables, environment variables, status line integration, and anything else tmux offers.
+
+Areas to explore (non-exhaustive starting points):
+
+### Hooks for event-driven reactivity
+- `window-linked` / `window-unlinked` — instant detection of session windows appearing/disappearing
+- `pane-died` — instant PID death detection (replaces /proc polling)
+- `pane-focus-in` / `pane-focus-out` — know which session the user is looking at
+- `window-renamed` — detect if claude renames its window
+- `alert-activity` / `alert-bell` / `alert-silence` — activity/inactivity signals from session panes
+- `session-window-changed` — user switched tabs, update "currently viewing" state
+- `after-resize-pane` / `after-resize-window` — react to layout changes
+- Custom hooks via `set-hook` — CCS could register hooks on startup and deregister on exit
+
+### Control mode (`tmux -C`)
+- Persistent connection to tmux server via stdin/stdout
+- Receives all events as structured text (no polling needed)
+- Can send commands and get responses synchronously
+- Could replace all tmux CLI calls with a single persistent connection
+- Eliminates fork/exec overhead of shelling out to `tmux` repeatedly
+
+### Alerts and monitoring
+- `monitor-activity` / `monitor-silence` — tmux-native activity detection per window
+- `activity-action` / `silence-action` — auto-trigger actions on activity/silence
+- Bell forwarding — session errors could ring the bell, CCS detects via hook
+- `visual-activity` / `visual-bell` / `visual-silence` — visual indicators in tmux status
+
+### Layout and window management
+- Named windows with structured naming convention (e.g., `ccs:projectname`)
+- Window reordering to keep active sessions grouped
+- Automatic layout adjustment when sessions start/stop
+- Split panes for side-by-side session monitoring within CCS
+- `select-layout` for auto-tiling multiple follow views
+
+### Popup and overlay windows
+- `display-popup` — overlay windows for quick session info/actions without leaving current pane
+- Popup for session detail view (summary, activity, context %)
+- Popup for quick-launch menu (project selector)
+- Popup for attention alerts ("session X needs input")
+
+### Status line integration
+- CCS could set tmux status-right with live session counts/status
+- Per-window status showing session state (active/waiting/error)
+- Format strings with `#{pane_current_command}` for live process info
+- Color-coded status based on attention states
+
+### Environment variables and session metadata
+- `tmux setenv` to pass CCS metadata to session panes
+- `tmux showenv` to read session state without file I/O
+- Could replace `active.json` tracker with tmux environment state
+- Session-to-window mapping stored in tmux instead of on disk
+
+### Key tables and input handling
+- Custom key table for CCS-specific bindings that work from any pane
+- Prefix-free shortcuts for common CCS actions (switch session, follow, etc.)
+- `send-keys` for programmatic input to sessions (e.g., auto-approve permissions)
+
+### Pane capture improvements
+- `capture-pane -p -t` with explicit target for reliable capture
+- `pipe-pane` — stream pane output to a file/pipe continuously (replaces polling)
+- `capture-pane -e` for ANSI-aware capture (preserve colors)
+- `copy-mode` integration for scrollback access
+
+### Process and pane introspection
+- `list-panes -F` with format strings for structured pane data
+- `#{pane_pid}`, `#{pane_current_command}`, `#{pane_start_command}` — direct PID/command info
+- `#{window_activity}` — last activity timestamp per window (replaces mtime checks)
+- `#{pane_dead}` — instant dead pane detection
+
+### Session lifecycle via tmux
+- `wait-for` channels — tmux-native IPC between CCS and session panes
+- `run-shell` hooks that notify CCS of events
+- Respawn dead panes for session restart
+- `remain-on-exit` for post-mortem inspection of crashed sessions
+
 ### Auto-naming prompt iteration
 The haiku naming prompt will need tuning based on real-world results. The initial prompt is task-oriented ("what is this session accomplishing?") but may need refinement. Key insight from discussion: Claude's own `/rename` grabs "interesting" details instead of the actual task — e.g., naming a config-sync setup session "bash-set-e-footgun-fix" because it latched onto a footnote. The ccs prompt must explicitly focus on the goal/task, not incidental details.
