@@ -314,9 +314,7 @@ func DiscoverSessions(projectsDir string) ([]types.Session, error) {
 	}
 
 	workers := 8
-	if len(toParse) < workers {
-		workers = len(toParse)
-	}
+	workers = min(workers, len(toParse))
 
 	jobs := make(chan sessionFile, len(toParse))
 	results := make(chan result, len(toParse))

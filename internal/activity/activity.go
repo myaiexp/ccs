@@ -247,10 +247,7 @@ func ExtractConversationText(path string, maxLines int) string {
 		return ""
 	}
 
-	offset := stat.Size() - tailSize
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(0, stat.Size()-tailSize)
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return ""
 	}
@@ -317,10 +314,7 @@ func TailFileLines(path string, maxLines int) string {
 		return ""
 	}
 
-	offset := stat.Size() - tailSize
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(0, stat.Size()-tailSize)
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return ""
 	}

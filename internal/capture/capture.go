@@ -62,9 +62,7 @@ func DeriveStatus(snap PaneSnapshot) string {
 
 	// 2. Permission prompt: recent lines with Allow/Deny patterns
 	recentStart := len(lines) - 10
-	if recentStart < 0 {
-		recentStart = 0
-	}
+	recentStart = max(0, recentStart)
 	for i := len(lines) - 1; i >= recentStart; i-- {
 		if permissionRe.MatchString(lines[i]) {
 			return "Permission prompt"

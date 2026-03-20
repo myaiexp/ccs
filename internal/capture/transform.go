@@ -21,9 +21,7 @@ func stripStatusBar(content string) string {
 	lines := strings.Split(content, "\n")
 	cutIdx := -1
 	searchStart := len(lines) - 15
-	if searchStart < 0 {
-		searchStart = 0
-	}
+	searchStart = max(0, searchStart)
 	for i := searchStart; i < len(lines); i++ {
 		if isBoxDrawingLine(lines[i]) {
 			if cutIdx == -1 {
