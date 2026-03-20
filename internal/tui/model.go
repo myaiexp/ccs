@@ -676,19 +676,29 @@ func (m *Model) applyFilter() {
 			m.searchResults = append(m.searchResults, SearchResult{DirPath: d.Path, DirName: d.Name})
 		}
 
-		// Match sessions
+		// Match sessions, then sort: active > open > most recent
 		sessTargets := make([]string, len(source))
 		for i, s := range source {
 			sessTargets[i] = s.ProjectName + " " + m.displayName(s) + " " + s.Title
 		}
 		sessMatches := fuzzy.Find(query, sessTargets)
+		var sessResults []SearchResult
 		for _, match := range sessMatches {
 			if match.Score <= 0 {
 				continue
 			}
 			s := source[match.Index]
-			m.searchResults = append(m.searchResults, SearchResult{Session: &s})
+			sessResults = append(sessResults, SearchResult{Session: &s})
 		}
+		sort.SliceStable(sessResults, func(i, j int) bool {
+			si, sj := sessResults[i].Session, sessResults[j].Session
+			pi, pj := statePriority(si.StateStatus), statePriority(sj.StateStatus)
+			if pi != pj {
+				return pi < pj
+			}
+			return si.LastActive.After(sj.LastActive)
+		})
+		m.searchResults = append(m.searchResults, sessResults...)
 
 		// Also build filtered for compatibility (session results only)
 		m.filtered = nil
@@ -1253,6 +1263,18 @@ func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
 		return nil
 	}
 	return paneCaptureCmd(sessionID, wid, 30)
+}
+
+// statePriority returns sort priority for session states (lower = higher priority).
+func statePriority(s types.StateStatus) int {
+	switch s {
+	case types.StatusActive:
+		return 0
+	case types.StatusOpen:
+		return 1
+	default:
+		return 2
+	}
 }
 
 func cycleValue(current int, values []int) int {
