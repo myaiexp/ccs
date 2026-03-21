@@ -29,7 +29,7 @@ All code was implemented and tests pass, but live testing reveals:
    - Status line format strings may have syntax errors
    - User's tmux config may override session-scoped settings
 
-4. **No visible change from before** — dashboard looks identical to pre-refactor. Follow mode was removed, but active rows should now have colored attention badges instead of expanded status lines. Either the attention data isn't flowing or the rendering isn't triggering.
+4. **Multi-line active rows were removed** — the expanded active rows with status history (fading colors, newest brightest) were the best feature and should NOT have been removed. The subagent over-simplified. Fix: restore `statusFadeColors`, multi-line status history rendering, and `maxActiveStatusLines()` height budgeting. The only intended change was adding colored attention badges ON TOP of the existing expanded rows, not replacing them.
 
 ## Debugging Strategy for Next Session
 
