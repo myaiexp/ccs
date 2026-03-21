@@ -1,6 +1,6 @@
 # ccs — Claude Code Session Hub
 
-Go TUI (bubbletea/lipgloss) that serves as a mission control dashboard for Claude Code sessions. Three-section layout: active sessions (expanded with live status), open sessions (scrollable with detail pane), and a footer with done count. Session lifecycle states (active/open/done), auto-naming via Haiku, and unified search replacing the project grid.
+Go TUI (bubbletea/lipgloss) that serves as a tabbed session manager for Claude Code sessions. Sessions run as tmux windows managed by ccs — the dashboard is the home tab, sessions are additional tabs. tmux status line renders a tab bar with attention states. Unix socket IPC enables `ccs launch` from external tools (Kelo). Session lifecycle states (active/open/done), auto-naming via Haiku, and unified search.
 
 ## Stack
 
@@ -13,7 +13,7 @@ Go TUI (bubbletea/lipgloss) that serves as a mission control dashboard for Claud
 ## Structure
 
 ```
-main.go                    Entry point, tmux bootstrap, wires up data loading → TUI
+main.go                    Entry point, CLI subcommands (launch, notify-exit), tmux bootstrap, lifecycle setup
 internal/
   types/types.go           Session (with StateStatus, ActiveSource), Config, SortField/SortDir
   config/config.go         Loads/saves ~/.config/ccs/config.toml, applies defaults
@@ -24,15 +24,25 @@ internal/
   state/state.go           Session lifecycle state + names (open/done, auto/manual naming)
   naming/naming.go         Haiku invocation: status summaries, condensed names, comprehensive summaries. Logged.
   project/project.go       ScanProjectDirs for ~/Projects/ directory listing
-  tmux/tmux.go             tmux CLI wrapper: Bootstrap, NewWindow, SelectWindow, WindowExists, CapturePaneContent
+  tmux/
+    tmux.go                tmux CLI wrappers: Bootstrap, NewWindow, SelectWindow, MoveWindow, SetWindowOption, etc.
+    keybind.go             Keybinding capture/restore with if-shell scoping for ccs-managed windows
+  ipc/
+    protocol.go            IPC message types: LaunchRequest/Response, ExitNotification
+    server.go              Unix socket server (listen, dispatch)
+    client.go              Client functions for ccs launch/notify-exit
+  tabmgr/
+    tabmgr.go              Tab manager: Launch, SwitchTo, HandleExit, on-done callbacks, SyncFromTracker
+    adopt.go               ScanAndAdopt: pulls external Claude windows into ccs session
+    statusline.go          tmux status line rendering: tab bar + attention summary
   capture/capture.go       PaneSnapshot, CapturePane, DeriveStatus (attention state detection)
   activity/activity.go     JSONL activity extraction: ExtractFromLine, TailFile, FormatEntry, ExtractConversationText
   watcher/watcher.go       fsnotify-based file watcher with debounce, sends ActivityUpdates
   tui/
-    model.go               Bubbletea Model, three-section layout, state integration, naming triggers
-    views.go               Render functions: active rows, open rows, detail pane, search results, footer
-    styles.go              Lipgloss style definitions (badges, status, activity, follow pane)
-    launch.go              Tmux window launch commands (TmuxLaunchResume, TmuxLaunchNew, TmuxSwitch)
+    model.go               Bubbletea Model, dashboard tab, tab manager integration, naming triggers
+    views.go               Render functions: active rows (with attention badges), open rows, detail pane, search, footer
+    styles.go              Lipgloss style definitions (badges, attention colors)
+    launch.go              Fallback tmux window launch commands
 ```
 
 ## Build & Install
@@ -45,32 +55,36 @@ go test ./... -count=1          # tests for all packages
 ## Key Design Decisions
 
 - **Session lifecycle** — four states: Active (PID alive, computed), Open (persisted in state.json), Done (user-marked), Untracked (legacy). Active sessions auto-promote to Open. State stored in `~/.cache/ccs/state.json`.
-- **Three-section layout** — Active section (always visible, expanded rows with live status), Open section (scrollable, selected shows detail pane), Done/Untracked (toggled with `h`). Unified j/k navigation across all sections.
-- **AI status summaries** — periodic (every 2 min) haiku-generated one-line summaries for active sessions. Up to 3 displayed with fading colors (newest brightest). Active status lines are dynamically capped by `maxActiveStatusLines()` based on terminal height. Content source: pane capture → JSONL conversation text fallback. `N` key triggers manually. Skips call if input unchanged. Logged to `~/.cache/ccs/naming.log`.
+- **Tabbed session wrapper** — ccs manages tmux windows within its session. Dashboard in window 0, each Claude session in its own window. Tab switching via tmux keybindings (`§ space` dashboard, `§ 1` prev, `§ 2` next). Keybindings scoped to ccs window via `if-shell` + `@ccs-managed` window option.
+- **tmux status line tab bar** — ccs takes over the tmux status line. Line 1: tab names with colored attention indicators (● yellow=waiting, orange=permission, red=error). Line 2: attention summary (collapses when no sessions need attention). Updated every 1s.
+- **Session adoption** — `ScanAndAdopt()` on startup detects Claude processes in other tmux windows and moves them into the ccs session via `tmux move-window`.
+- **IPC via unix socket** — `~/.cache/ccs/ccs.sock`. `ccs launch --project DIR [--resume ID] [--prompt TEXT] [--on-done CMD]` sends launch requests. `ccs notify-exit --window ID` fires from tmux pane-exited hooks.
+- **on-done callbacks** — when a session with `--on-done` exits, ccs waits up to 10s for haiku transition summary, then fires the callback with CCS_SESSION_ID, CCS_SESSION_PROJECT, CCS_SESSION_SUMMARY env vars.
+- **Dashboard layout** — Active section (single-line rows with attention badges), Open section (scrollable with detail pane), Done/Untracked (toggled with `h`). Unified j/k navigation.
+- **AI status summaries** — periodic (every 2 min) haiku-generated one-line summaries for active sessions. Content source: pane capture → JSONL conversation text fallback. `N` key triggers manually. Skips call if input unchanged. Logged to `~/.cache/ccs/naming.log`.
 - **Transition summaries** — when session goes inactive, haiku condenses status history into a short name + comprehensive multi-line summary for the detail pane.
 - **Display name fallback** — manual name > auto name > /session-name > first user message title
 - **Attention states** — `DeriveStatus()` scans pane content bottom-up: waiting prompt, permission prompt, thinking/spinner, error, or fallback to last content line. Fast pattern matching (1s polling).
 - **Stable active ordering** — active sessions don't re-sort on refresh; only new sessions insert at top. Prevents cursor disorientation.
 - **Search rework** — `/` searches all sessions (any lifecycle state) + project directories at `~/Projects/`. Fuzzy matches filtered by score > 0 (eliminates noise). Results have scroll windowing with position indicator. Project dirs shown first, then sessions sorted by state priority (active > open > rest) then recency. Results show state badges: `●` active, `○` open, `✓` done, `·` untracked, `▸` project dir. All typed characters go to input (no shortcut interception in search mode).
-- **tmux-only mode** — auto-bootstraps into tmux. All sessions open as new tmux windows.
-- **Follow mode** — `f` key on active SourceTmux session enters split view with live pane capture.
-- **Live pane capture** — 1s polling. Captures all sessions with tmux windows. Persists after inactive (dimmed).
+- **tmux-only mode** — auto-bootstraps into tmux. Sessions managed as tmux windows.
+- **Live pane capture** — 1s polling. Captures all sessions with tmux windows. Used for AI status summaries and attention state detection.
 - **Live activity monitoring** — fsnotify watches active JSONL files. 200ms debounce.
 - **PID-based tracking** — `~/.cache/ccs/active.json` maps session IDs to PIDs and tmux window IDs. Detects `/new` (same PID, new session) via stale JSONL + newer file heuristic (5s threshold).
 - **Event-driven reactivity** — fsnotify watches both active JSONL files (content changes, 200ms debounce) and their parent dirs (new file creation → instant `/new` detection). Base tick is 3s safety net. Dir watches auto-managed by syncWatcher.
 - **JSONL parsing** streams line-by-line, never loads entire file into memory
 - **Detail pane** — 2-column layout: left = AI comprehensive summary, right = JSONL conversation text. Right column: 2 sticky non-trivial (>20 char) user messages at top, then conversation tail (human `›` + assistant `»`, no tool calls). Text blocks collapsed to single lines. Right-side format: `time ctx%` with fixed-width fields for vertical alignment.
-- **Height budgeting** — `maxActiveStatusLines()` dynamically caps status lines per active session based on terminal height. `scrollWindow()` fixedOverhead = 8 (border 2, title 1, OPEN header+margin 2, scroll indicator 1, footer+margin 2). Prevents top-row clipping when many active sessions are running.
-- **Context window** — `maxContextTokens = 1000000` (Opus 4.6 1M context). Context % displayed right-aligned in fixed 4-char field.
-- **Known gap**: pane capture for inactive sessions doesn't persist across ccs restarts (only in-memory).
-- **Known gap**: pane capture frequently empty for active sessions (tracker doesn't always have tmux window IDs). JSONL conversation text fallback mitigates this.
+- **Startup lifecycle** — sets `@ccs-managed` on dashboard window, starts IPC server, captures and installs scoped keybindings, sets up status line, creates tab manager, adopts existing windows. Cleanup on exit: restores bindings, status line, clears `@ccs-managed`, closes socket.
+- **Stateless window management** — if ccs crashes/restarts, it re-discovers and re-adopts all Claude windows. No session data is lost.
 - **lipgloss `.Width()` includes padding** — must subtract padding for text width calculations.
 - **lipgloss doesn't clip content wider than `.Width()`** — all detail pane rows are hard-capped with `truncateToWidth(row, contentWidth)` to prevent border overflow.
 - **lipgloss background on pre-styled text doesn't work** — inner ANSI resets cancel outer background. Use cursor indicators (`▸`) instead of background highlighting.
 
 ## Key Bindings
 
-`enter` switch/resume, `1-9` shortcuts, `f` follow, `c` complete, `o` reopen, `R` rename, `N` auto-name, `/` search, `s` sort, `r` reverse, `d` delete, `h` toggle done/untracked, `p` prefs, `j/k/↑↓` navigate, `gg/G` top/bottom, `?` help, `esc` exit follow/clear filter, `q` quit
+**Dashboard:** `enter` switch/launch tab, `c` complete, `o` reopen, `R` rename, `N` auto-name, `/` search, `s` sort, `r` reverse, `d` delete, `h` toggle done/untracked, `p` prefs, `j/k/↑↓` navigate, `gg/G` top/bottom, `?` help, `esc` clear filter, `q` quit
+
+**tmux (scoped to ccs window):** `§ space` dashboard, `§ 1` prev tab, `§ 2` next tab
 
 ## Config
 
