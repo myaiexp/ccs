@@ -118,22 +118,27 @@ func RenameWindow(windowID, name string) error {
 }
 
 // SetStatusFormat sets the tmux status line format for the current session.
-// lineIndex: 0 or 1 (for two-line status). Uses session-scoped option.
+// lineIndex: 0 or 1 (for two-line status). Session-scoped (no -s flag).
 func SetStatusFormat(lineIndex int, format string) error {
 	opt := fmt.Sprintf("status-format[%d]", lineIndex)
-	return exec.Command("tmux", "set-option", "-s", opt, format).Run()
+	return exec.Command("tmux", "set-option", opt, format).Run()
 }
 
 // UnsetStatusFormat removes session-scoped status format overrides.
 func UnsetStatusFormat() error {
-	_ = exec.Command("tmux", "set-option", "-su", "status-format[0]").Run()
-	_ = exec.Command("tmux", "set-option", "-su", "status-format[1]").Run()
+	_ = exec.Command("tmux", "set-option", "-u", "status-format[0]").Run()
+	_ = exec.Command("tmux", "set-option", "-u", "status-format[1]").Run()
 	return nil
 }
 
-// SetStatusLines sets the number of status lines (1 or 2). Session-scoped.
+// SetStatusLines sets the number of status lines. Session-scoped.
+// tmux accepts "on" (1 line), "off", or "2"-"5" for multi-line.
 func SetStatusLines(count int) error {
-	return exec.Command("tmux", "set-option", "-s", "status", fmt.Sprintf("%d", count)).Run()
+	val := "on"
+	if count >= 2 {
+		val = fmt.Sprintf("%d", count)
+	}
+	return exec.Command("tmux", "set-option", "status", val).Run()
 }
 
 // ListKeys returns current keybindings for the given key table.

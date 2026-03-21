@@ -1,30 +1,97 @@
 package tmux
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 // SavedBindings holds the original keybindings captured before ccs overrides them.
 type SavedBindings struct {
-	Space string // original command for prefix+Space
-	One   string // original command for prefix+1
-	Two   string // original command for prefix+2
+	Space string `json:"space"` // original command for prefix+Space
+	One   string `json:"one"`   // original command for prefix+1
+	Two   string `json:"two"`   // original command for prefix+2
 }
 
-// CaptureBindings reads current prefix bindings for Space, 1, 2
-// by parsing output of `tmux list-keys -T prefix`.
+func savedBindingsPath() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = filepath.Join(os.TempDir(), "ccs")
+	}
+	return filepath.Join(dir, "ccs", "original-bindings.json")
+}
+
+// CaptureBindings reads current prefix bindings for Space, 1, 2.
+// If a saved bindings file exists from a previous (possibly crashed) run,
+// loads from that instead of re-parsing tmux state (which may contain
+// corrupted ccs if-shell bindings).
 func CaptureBindings() (SavedBindings, error) {
+	// Check for persisted originals from a previous run
+	if saved, err := loadSavedBindings(); err == nil {
+		return saved, nil
+	}
+
+	// Fresh capture from tmux
 	lines, err := ListKeys("prefix")
 	if err != nil {
 		return SavedBindings{}, err
 	}
-	return parseBindings(lines), nil
+	saved := parseBindings(lines)
+
+	// Filter out any leftover ccs bindings (from a crash that didn't clean up)
+	saved = filterCCSBindings(saved)
+
+	// Persist for crash recovery
+	_ = persistSavedBindings(saved)
+
+	return saved, nil
+}
+
+// ClearSavedBindings removes the persisted bindings file.
+// Called on clean exit after restoring originals.
+func ClearSavedBindings() {
+	_ = os.Remove(savedBindingsPath())
+}
+
+func loadSavedBindings() (SavedBindings, error) {
+	data, err := os.ReadFile(savedBindingsPath())
+	if err != nil {
+		return SavedBindings{}, err
+	}
+	var saved SavedBindings
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return SavedBindings{}, err
+	}
+	return saved, nil
+}
+
+func persistSavedBindings(saved SavedBindings) error {
+	p := savedBindingsPath()
+	_ = os.MkdirAll(filepath.Dir(p), 0700)
+	data, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, 0644)
+}
+
+// filterCCSBindings clears any binding that is a leftover ccs if-shell binding.
+func filterCCSBindings(saved SavedBindings) SavedBindings {
+	if strings.Contains(saved.Space, "@ccs-managed") {
+		saved.Space = ""
+	}
+	if strings.Contains(saved.One, "@ccs-managed") {
+		saved.One = ""
+	}
+	if strings.Contains(saved.Two, "@ccs-managed") {
+		saved.Two = ""
+	}
+	return saved
 }
 
 // parseBindings extracts Space, 1, 2 bindings from list-keys output lines.
-// Each line is like: bind-key -T prefix 1 select-window -t :1
-// The key is the 4th field, everything from the 5th field onward is the command.
 func parseBindings(lines []string) SavedBindings {
 	var saved SavedBindings
 	for _, line := range lines {
@@ -41,25 +108,37 @@ func parseBindings(lines []string) SavedBindings {
 	return saved
 }
 
-// parseBindingLine extracts the key and command from a single list-keys line.
-// Returns ("", "") if the line doesn't match the expected format.
+// parseBindingLine extracts the key and raw command from a single list-keys line.
+// Preserves the exact command text including quotes and escaping.
+// Format: "bind-key    -T prefix <key>   <command...>"
 func parseBindingLine(line string) (key, cmd string) {
-	fields := strings.Fields(line)
-	// Minimum: "bind-key -T prefix <key> <command...>"
-	if len(fields) < 5 {
+	// Must be a bind-key line (not unbind-key, etc.)
+	trimmed := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(trimmed, "bind-key") {
 		return "", ""
 	}
-	// fields[0] = "bind-key", [1] = "-T", [2] = "prefix", [3] = key, [4:] = command
-	if fields[0] != "bind-key" || fields[1] != "-T" || fields[2] != "prefix" {
+
+	// Find " prefix " to locate where the key starts
+	idx := strings.Index(line, " prefix ")
+	if idx < 0 {
 		return "", ""
 	}
-	key = fields[3]
-	cmd = strings.Join(fields[4:], " ")
+
+	// Skip "prefix" and whitespace to find the key
+	rest := strings.TrimLeft(line[idx+8:], " \t") // 8 = len(" prefix ")
+
+	// Key is the next non-whitespace token
+	spaceIdx := strings.IndexAny(rest, " \t")
+	if spaceIdx < 0 {
+		return rest, "" // key with no command
+	}
+
+	key = rest[:spaceIdx]
+	cmd = strings.TrimLeft(rest[spaceIdx:], " \t")
 	return key, cmd
 }
 
 // buildIfShellArgs constructs the exec args for a tmux bind-key with if-shell fallback.
-// Returns the full args slice for exec.Command("tmux", args...).
 func buildIfShellArgs(key, shellTest, ccsAction, fallbackAction string) []string {
 	return []string{
 		"bind-key", "-T", "prefix", key,
@@ -68,14 +147,6 @@ func buildIfShellArgs(key, shellTest, ccsAction, fallbackAction string) []string
 }
 
 // InstallCCSBindings registers ccs-scoped keybindings with if-shell fallbacks.
-// Uses `tmux show -wv @ccs-managed 2>/dev/null` for conditional scoping.
-// CCS actions:
-//
-//	Space → select-window -t :0 (dashboard)
-//	1 → previous-window
-//	2 → next-window
-//
-// Fallback actions: the captured original bindings.
 // The if-shell test checks whether the current window has @ccs-managed set.
 func InstallCCSBindings(saved SavedBindings) error {
 	shellTest := "tmux show -wv @ccs-managed 2>/dev/null"
@@ -93,7 +164,6 @@ func InstallCCSBindings(saved SavedBindings) error {
 	for _, b := range bindings {
 		fallback := b.fallback
 		if fallback == "" {
-			// No original binding — use a no-op as fallback
 			fallback = "display-message ''"
 		}
 		args := buildIfShellArgs(b.key, shellTest, b.ccsAction, fallback)
@@ -105,7 +175,7 @@ func InstallCCSBindings(saved SavedBindings) error {
 }
 
 // RestoreBindings removes ccs bindings and restores originals.
-// Re-binds the original commands for Space, 1, 2.
+// Uses sh -c to properly handle complex commands with quotes/escaping.
 func RestoreBindings(saved SavedBindings) error {
 	restorations := []struct {
 		key string
@@ -118,14 +188,12 @@ func RestoreBindings(saved SavedBindings) error {
 
 	for _, r := range restorations {
 		if r.cmd != "" {
-			// Restore original binding — use exec.Command directly
-			// because BindKey splits by spaces which works fine for simple commands.
-			if err := BindKey("prefix", r.key, r.cmd); err != nil {
-				// Log error but continue restoring other bindings
+			// Use sh -c to handle complex commands (escaped quotes, semicolons, etc.)
+			fullCmd := "tmux bind-key -T prefix " + r.key + " " + r.cmd
+			if err := exec.Command("sh", "-c", fullCmd).Run(); err != nil {
 				continue
 			}
 		} else {
-			// No original binding existed — unbind to clean up
 			_ = UnbindKey("prefix", r.key)
 		}
 	}

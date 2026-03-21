@@ -14,9 +14,10 @@ func TransformPaneContent(content string) string {
 	return content
 }
 
-// stripStatusBar removes status bar / HUD lines from the bottom of captured pane content.
-// Scans the last 15 lines from the bottom for the topmost box-drawing separator line
-// and strips everything from there downward (HUD content, prompt lines, etc).
+// stripStatusBar removes Claude Code's status bar from the bottom of captured pane content.
+// Finds the LAST box-drawing separator in the bottom 15 lines and strips from there down.
+// This preserves the input prompt (❯) which sits between two separators when CC is idle,
+// while still removing the status bar and permissions indicator below the last separator.
 func stripStatusBar(content string) string {
 	lines := strings.Split(content, "\n")
 	cutIdx := -1
@@ -24,9 +25,7 @@ func stripStatusBar(content string) string {
 	searchStart = max(0, searchStart)
 	for i := searchStart; i < len(lines); i++ {
 		if isBoxDrawingLine(lines[i]) {
-			if cutIdx == -1 {
-				cutIdx = i
-			}
+			cutIdx = i // keep updating — we want the LAST separator
 		}
 	}
 	if cutIdx > 0 {

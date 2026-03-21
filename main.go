@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,6 +31,9 @@ func main() {
 		case "notify-exit":
 			handleNotifyExit()
 			return
+		case "cleanup":
+			handleCleanup()
+			return
 		}
 	}
 
@@ -50,13 +54,16 @@ func main() {
 		return
 	}
 
-	// 4. Set @ccs-managed on current (dashboard) window
+	// 4. Clean up any stale ccs state from a previous crash
+	cleanupStaleCCSState()
+
+	// 5. Set @ccs-managed on current (dashboard) window
 	currentWin, _ := tmux.CurrentWindowID()
 	if currentWin != "" {
 		_ = tmux.SetWindowOption(currentWin, "ccs-managed", "1")
 	}
 
-	// 5. Start IPC server
+	// 6. Start IPC server
 	socketPath := ipc.SocketPath()
 	_ = os.MkdirAll(filepath.Dir(socketPath), 0700)
 	server, err := ipc.NewServer(socketPath)
@@ -65,25 +72,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 6. Signal handler for cleanup
+	// 7. Signal handler for cleanup
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// 7. Capture and install keybindings
+	// 8. Capture and install keybindings
 	savedBindings, _ := tmux.CaptureBindings()
 	_ = tmux.InstallCCSBindings(savedBindings)
 
-	// 8. Set up status line
+	// 9. Set up status line
 	_ = tmux.SetStatusLines(2)
 
-	// 9. Create tab manager
+	// 10. Create tab manager
 	sessName, _ := tmux.CurrentSessionName()
 	tracker := session.LoadTracker()
 	st := state.Load()
 	manager := tabmgr.New(sessName, tracker, st, cfg.ClaudeFlags)
-
-	// 10. Adopt existing Claude windows
-	_, _ = manager.ScanAndAdopt()
 
 	// 11. Start IPC server goroutine (handler wired after tea.NewProgram below)
 	go server.Serve()
@@ -136,6 +140,7 @@ func main() {
 	// 16. Cleanup function — runs on signal, error exit, and normal exit
 	cleanup := func() {
 		_ = tmux.RestoreBindings(savedBindings)
+		tmux.ClearSavedBindings() // Clean exit — remove persisted originals
 		_ = tmux.UnsetStatusFormat()
 		_ = tmux.SetStatusLines(1)
 		// Clear @ccs-managed from all windows in session
@@ -215,4 +220,62 @@ func handleNotifyExit() {
 
 	// Fire-and-forget — ignore errors (ccs may have already exited)
 	ipc.NotifyExit(ipc.SocketPath(), notif)
+}
+
+// handleCleanup is the `ccs cleanup` subcommand — manually restores tmux state
+// after a ccs crash that left stale keybindings, status format, or @ccs-managed options.
+func handleCleanup() {
+	if !tmux.InTmux() {
+		fmt.Fprintln(os.Stderr, "Not in tmux — nothing to clean up")
+		return
+	}
+	cleanupStaleCCSState()
+	fmt.Println("Cleaned up stale ccs state")
+}
+
+// cleanupStaleCCSState detects and removes leftover ccs modifications from tmux.
+// Runs on startup (to recover from crashes) and via `ccs cleanup`.
+func cleanupStaleCCSState() {
+	// Remove any ccs if-shell keybindings — restore tmux defaults
+	lines, err := tmux.ListKeys("prefix")
+	if err == nil {
+		for _, line := range lines {
+			if strings.Contains(line, "@ccs-managed") {
+				// This is a stale ccs binding — figure out which key and unbind
+				for _, key := range []string{"Space", "1", "2"} {
+					if strings.Contains(line, " "+key+" ") || strings.HasSuffix(line, " "+key) {
+						// Restore tmux default
+						switch key {
+						case "Space":
+							_ = tmux.BindKey("prefix", key, "next-layout")
+						case "1":
+							_ = tmux.BindKey("prefix", key, "select-window -t :1")
+						case "2":
+							_ = tmux.BindKey("prefix", key, "select-window -t :2")
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Remove stale saved bindings file
+	tmux.ClearSavedBindings()
+
+	// Unset any custom status format and restore single-line status
+	_ = tmux.UnsetStatusFormat()
+	_ = tmux.SetStatusLines(1)
+
+	// Clear @ccs-managed from all windows in current session
+	sessName, err := tmux.CurrentSessionName()
+	if err == nil {
+		if windows, err := tmux.SessionWindows(sessName); err == nil {
+			for _, wid := range windows {
+				_ = tmux.SetWindowOption(wid, "ccs-managed", "")
+			}
+		}
+	}
+
+	// Remove stale IPC socket
+	_ = os.Remove(ipc.SocketPath())
 }

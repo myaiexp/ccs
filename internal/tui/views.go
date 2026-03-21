@@ -168,7 +168,10 @@ func (m Model) View() string {
 	return bs.Render(content)
 }
 
-// renderActiveRow renders an active session as a single-line row with colored attention badge.
+// statusFadeColors defines colors from brightest (most recent) to dimmest (oldest).
+var statusFadeColors = []string{"252", "248", "245", "242", "239"}
+
+// renderActiveRow renders an expanded active session with attention badge and status history.
 func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 	isSelected := globalIdx == m.sessionIdx
 	contentWidth := m.width - 5
@@ -193,17 +196,49 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 		projName = projName[:19] + "…"
 	}
 
-	name := m.displayName(s)
+	// Show attention status on header line (truncated)
+	statusText := ""
+	if status != "" {
+		if len([]rune(status)) > 50 {
+			status = string([]rune(status)[:50])
+		}
+		statusText = statusStyle.Render(status)
+	}
 
 	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
-	leftFixed := 7 + lipgloss.Width(projName) + 2 // badge+space+num+space + proj + gap
-	maxName := max(contentWidth-leftFixed-rightWidth-2, 10)
-	name = truncateToWidth(name, maxName)
-
-	leftParts := fmt.Sprintf("%s%s %s %s  %s", cursor, badge, num, projName, name)
+	leftParts := fmt.Sprintf("%s%s %s %s", cursor, badge, num, projName)
+	if statusText != "" {
+		leftParts += "  " + statusText
+	}
 	gap := max(contentWidth-lipgloss.Width(leftParts)-rightWidth, 1)
-	return leftParts + strings.Repeat(" ", gap) + rightSide
+	headerLine := leftParts + strings.Repeat(" ", gap) + rightSide
+
+	var lines []string
+	lines = append(lines, headerLine)
+
+	// Show AI status history with fading colors (newest = brightest, oldest = dimmest)
+	maxShow := m.maxActiveStatusLines()
+	history := m.state.StatusHistory(s.ID)
+	if len(history) > maxShow {
+		history = history[len(history)-maxShow:]
+	}
+
+	if len(history) > 0 {
+		for i, entry := range history {
+			// Fade index: 0 = oldest shown = dimmest, len-1 = newest = brightest
+			fadeIdx := len(history) - 1 - i
+			if fadeIdx >= len(statusFadeColors) {
+				fadeIdx = len(statusFadeColors) - 1
+			}
+			color := statusFadeColors[fadeIdx]
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+			text := truncateToWidth(entry.Text, contentWidth-6)
+			lines = append(lines, "      "+style.Render(text))
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // renderOpenRow renders a compact session row for the open section.
@@ -324,7 +359,7 @@ func (m Model) renderDetail(s types.Session) string {
 	assistPrefixStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 	var rightLines []string
 	if s.FilePath != "" {
-		convText := m.cachedConvText(s.ID, s.FilePath, bodyHeight*6)
+		convText := m.cachedConvText(s.ID)
 		if convText != "" {
 			rawLines := strings.Split(convText, "\n")
 

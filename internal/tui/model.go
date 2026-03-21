@@ -32,10 +32,16 @@ type ActivityUpdateMsg struct {
 }
 type TickMsg struct{}
 
-// PaneCaptureMsg delivers a pane capture result.
+// RefreshDoneMsg carries results from an async refresh.
+type RefreshDoneMsg struct {
+	Sessions    []types.Session
+	ProjectDirs []project.ProjectDir
+	Err         error
+}
+
+// PaneCaptureMsg delivers batched pane capture results for all active sessions.
 type PaneCaptureMsg struct {
-	Snapshot capture.PaneSnapshot
-	Err      error
+	Snapshots []capture.PaneSnapshot
 }
 
 // DirChangeMsg signals that a new JSONL file appeared in a watched project dir.
@@ -83,6 +89,12 @@ type TabExitMsg struct {
 // StatusLineTickMsg triggers periodic status line updates.
 type StatusLineTickMsg struct{}
 
+// ConvTextLoadMsg delivers async-loaded conversation text.
+type ConvTextLoadMsg struct {
+	SessionID string
+	Text      string
+}
+
 // SearchResult is a union type for search results: either a session or a project directory.
 type SearchResult struct {
 	Session *types.Session // nil for project dir results
@@ -126,6 +138,7 @@ type Model struct {
 	searchIdx         int                            // index into searchResults
 	prevActiveIDs     map[string]bool                // previous refresh active set (for transition detection)
 	lastSummaryInput  map[string]string              // sessionID -> pane content hash from last status summary call
+	refreshing        bool                           // true while async refresh is in flight
 }
 
 func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, st *state.Store, w *watcher.Watcher, mgr *tabmgr.Manager, projectsDir string, projectsRoot string) Model {
@@ -215,33 +228,84 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case DirChangeMsg:
-		cmd := m.handleRefresh()
+	case RefreshDoneMsg:
+		m.refreshing = false
+		if msg.Err != nil {
+			m.errMsg = fmt.Sprintf("Session discovery error: %v", msg.Err)
+			return m, nil
+		}
+
+		justPromoted := computeStateStatuses(msg.Sessions, m.tracker, m.state)
+
+		newActiveIDs := make(map[string]bool)
+		for _, s := range msg.Sessions {
+			if s.StateStatus == types.StatusActive {
+				newActiveIDs[s.ID] = true
+			}
+		}
+
+		namingCmds := m.scheduleNamingTriggers(newActiveIDs, justPromoted)
+		m.prevActiveIDs = newActiveIDs
+
+		m.syncWatcher(msg.Sessions)
+
+		m.sessions = msg.Sessions
+		m.projectDirs = msg.ProjectDirs
+		m.eagerLoadActivities()
+		m.applyFilter()
+
 		var cmds []tea.Cmd
-		if cmd != nil {
+		cmds = append(cmds, namingCmds...)
+		// Preload conv text for selected session after refresh
+		if cmd := m.preloadConvText(); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
+
+	case DirChangeMsg:
+		var cmds []tea.Cmd
+		if !m.refreshing {
+			m.refreshing = true
+			cmds = append(cmds, asyncRefreshCmd(m.projectsDir, m.projectsRoot, m.tracker))
 		}
 		if m.watcher != nil {
 			cmds = append(cmds, dirWatchCmd(m.watcher))
 		}
 		return m, tea.Batch(cmds...)
 
+	case ConvTextLoadMsg:
+		m.convTextCache[msg.SessionID] = msg.Text
+		return m, nil
+
 	case PaneCaptureMsg:
-		if msg.Err == nil {
-			m.paneContent[msg.Snapshot.SessionID] = msg.Snapshot
+		for _, snap := range msg.Snapshots {
+			m.paneContent[snap.SessionID] = snap
+			// Propagate attention state to tab manager for status line rendering
+			if m.tabmgr != nil {
+				status := capture.DeriveStatus(snap)
+				tmuxWindows := m.tracker.TmuxWindowIDs()
+				if wid, ok := tmuxWindows[snap.SessionID]; ok {
+					attention := ""
+					switch status {
+					case "Waiting for input":
+						attention = "waiting"
+					case "Permission prompt":
+						attention = "permission"
+					}
+					if strings.HasPrefix(status, "Error:") {
+						attention = "error"
+					}
+					m.tabmgr.UpdateAttention(wid, attention)
+				}
+			}
 		}
 		return m, nil
 
 	case PaneCaptureTickMsg:
-		var cmds []tea.Cmd
-		tmuxWindows := m.tracker.TmuxWindowIDs()
-		for sessID := range tmuxWindows {
-			if cmd := m.captureCmdForSession(sessID); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		cmds = append(cmds, paneCaptureTickCmd())
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(batchPaneCaptureCmd(m.tracker), paneCaptureTickCmd())
 
 	case AutoNameMsg:
 		if msg.Name != "" {
@@ -318,14 +382,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.tabmgr != nil {
 			m.tabmgr.HandleExit(msg.WindowID)
 		}
-		return m, m.handleRefresh()
+		if !m.refreshing {
+			m.refreshing = true
+			return m, asyncRefreshCmd(m.projectsDir, m.projectsRoot, m.tracker)
+		}
+		return m, nil
 
 	case TickMsg:
-		cmd := m.handleRefresh()
-		return m, tea.Batch(cmd, tickCmd())
+		if !m.refreshing {
+			m.refreshing = true
+			return m, tea.Batch(asyncRefreshCmd(m.projectsDir, m.projectsRoot, m.tracker), tickCmd())
+		}
+		return m, tickCmd()
 
 	case RefreshMsg:
-		return m, m.handleRefresh()
+		if !m.refreshing {
+			m.refreshing = true
+			return m, asyncRefreshCmd(m.projectsDir, m.projectsRoot, m.tracker)
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -652,7 +727,27 @@ func (m Model) handleNavigation(key string) (Model, tea.Cmd) {
 			m.sessionIdx++
 		}
 	}
+	// Preload conversation text for newly selected open session
+	if cmd := m.preloadConvText(); cmd != nil {
+		return m, cmd
+	}
 	return m, nil
+}
+
+// preloadConvText returns a cmd to async-load conversation text for the
+// currently selected session if it's not already cached.
+func (m Model) preloadConvText() tea.Cmd {
+	if m.sessionIdx >= len(m.filtered) {
+		return nil
+	}
+	s := m.filtered[m.sessionIdx]
+	if s.StateStatus == types.StatusActive || s.FilePath == "" {
+		return nil
+	}
+	if _, ok := m.convTextCache[s.ID]; ok {
+		return nil
+	}
+	return convTextLoadCmd(s.ID, s.FilePath, m.detailBodyRows()*6)
 }
 
 func (m Model) handleEnter() (Model, tea.Cmd) {
@@ -914,9 +1009,62 @@ func (m *Model) displayName(s types.Session) string {
 	return s.Title
 }
 
-// activeRowLines returns how many lines an active row takes (always 1 now).
-func (m *Model) activeRowLines(_ types.Session) int {
-	return 1
+// maxActiveStatusLines returns how many status lines each active session may show,
+// capped to fit within terminal height alongside other sections.
+func (m Model) maxActiveStatusLines() int {
+	active := m.activeSessions()
+	openList := m.openSessions()
+	nActive := len(active)
+	nOpen := len(openList)
+
+	if nActive == 0 || m.height == 0 {
+		return 5
+	}
+
+	// Non-active overhead: border(2) + title(1) + ACTIVE header+margin(2) +
+	// OPEN header+margin(2) + scroll indicator(1) + footer+margin(2) = 10
+	overhead := 10
+
+	// Detail pane
+	if m.sessionIdx >= nActive && nOpen > 0 {
+		overhead += m.detailPaneLines()
+	}
+
+	// 1 header line per active session (no status)
+	overhead += nActive
+
+	// Reserve at least 1 open row
+	if nOpen > 0 {
+		overhead++
+	}
+
+	avail := m.height - overhead
+	if avail <= 0 {
+		return 0
+	}
+
+	perSession := avail / nActive
+	perSession = min(perSession, 3)
+	return perSession
+}
+
+// activeRowLines returns how many lines an active row takes.
+func (m *Model) activeRowLines(s types.Session) int {
+	maxStatus := m.maxActiveStatusLines()
+	lines := 1 // header line
+	history := m.state.StatusHistory(s.ID)
+	if len(history) > 0 {
+		n := len(history)
+		n = min(n, maxStatus)
+		lines += n
+	} else if maxStatus > 0 {
+		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
+			paneLines := strings.Split(snap.Content, "\n")
+			n := min(2, maxStatus, len(paneLines))
+			lines += n
+		}
+	}
+	return lines
 }
 
 // scrollWindow returns the start and end indices for the visible open session window.
@@ -1051,7 +1199,7 @@ func statusSummaryTickCmd() tea.Cmd {
 }
 
 func statusLineTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 		return StatusLineTickMsg{}
 	})
 }
@@ -1121,36 +1269,18 @@ func dirWatchCmd(w *watcher.Watcher) tea.Cmd {
 	}
 }
 
-func (m *Model) handleRefresh() tea.Cmd {
-	sessions, err := session.LoadSessions(m.projectsDir, m.tracker)
-	if err != nil {
-		m.errMsg = fmt.Sprintf("Session discovery error: %v", err)
-		return nil
-	}
-
-	justPromoted := computeStateStatuses(sessions, m.tracker, m.state)
-
-	newActiveIDs := make(map[string]bool)
-	for _, s := range sessions {
-		if s.StateStatus == types.StatusActive {
-			newActiveIDs[s.ID] = true
+func asyncRefreshCmd(projectsDir, projectsRoot string, tracker *session.Tracker) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := session.LoadSessions(projectsDir, tracker)
+		if err != nil {
+			return RefreshDoneMsg{Err: err}
+		}
+		projDirs := project.ScanProjectDirs(projectsRoot)
+		return RefreshDoneMsg{
+			Sessions:    sessions,
+			ProjectDirs: projDirs,
 		}
 	}
-
-	namingCmds := m.scheduleNamingTriggers(newActiveIDs, justPromoted)
-	m.prevActiveIDs = newActiveIDs
-
-	m.syncWatcher(sessions)
-
-	m.sessions = sessions
-	m.projectDirs = project.ScanProjectDirs(m.projectsRoot)
-	m.eagerLoadActivities()
-	m.applyFilter()
-
-	if len(namingCmds) > 0 {
-		return tea.Batch(namingCmds...)
-	}
-	return nil
 }
 
 // scheduleNamingTriggers returns naming commands for sessions that just went
@@ -1251,37 +1381,56 @@ func (m *Model) eagerLoadActivities() {
 	}
 }
 
-// cachedConvText returns conversation text for a session, using a cache to avoid
-// re-reading 128KB of JSONL on every View() call.
-func (m *Model) cachedConvText(sessionID, filePath string, maxLines int) string {
+// cachedConvText returns conversation text from cache. Returns "" on cache miss
+// (async load triggered via convTextLoadCmd on navigation).
+func (m *Model) cachedConvText(sessionID string) string {
 	if text, ok := m.convTextCache[sessionID]; ok {
 		return text
 	}
-	text := activity.ExtractConversationText(filePath, maxLines)
-	m.convTextCache[sessionID] = text
-	return text
+	return ""
 }
 
-func paneCaptureCmd(sessionID, windowID string, lines int) tea.Cmd {
+func convTextLoadCmd(sessionID, filePath string, maxLines int) tea.Cmd {
 	return func() tea.Msg {
-		snap, err := capture.CapturePane(sessionID, windowID, lines)
-		return PaneCaptureMsg{Snapshot: snap, Err: err}
+		text := activity.ExtractConversationText(filePath, maxLines)
+		return ConvTextLoadMsg{SessionID: sessionID, Text: text}
+	}
+}
+
+// batchPaneCaptureCmd captures all active sessions' panes in a single goroutine,
+// returning one PaneCaptureMsg with all results. This reduces message frequency
+// from N messages/tick (one per session) to 1 message/tick.
+func batchPaneCaptureCmd(tracker *session.Tracker) tea.Cmd {
+	tmuxWindows := tracker.TmuxWindowIDs()
+	if len(tmuxWindows) == 0 {
+		return nil
+	}
+
+	type captureTarget struct {
+		sessionID string
+		windowID  string
+	}
+	var targets []captureTarget
+	for sessID, wid := range tmuxWindows {
+		targets = append(targets, captureTarget{sessID, wid})
+	}
+
+	return func() tea.Msg {
+		var snapshots []capture.PaneSnapshot
+		for _, t := range targets {
+			snap, err := capture.CapturePane(t.sessionID, t.windowID, 30)
+			if err == nil {
+				snapshots = append(snapshots, snap)
+			}
+		}
+		return PaneCaptureMsg{Snapshots: snapshots}
 	}
 }
 
 func paneCaptureTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 		return PaneCaptureTickMsg{}
 	})
-}
-
-func (m *Model) captureCmdForSession(sessionID string) tea.Cmd {
-	tmuxWindows := m.tracker.TmuxWindowIDs()
-	wid, ok := tmuxWindows[sessionID]
-	if !ok {
-		return nil
-	}
-	return paneCaptureCmd(sessionID, wid, 30)
 }
 
 // statePriority returns sort priority for session states (lower = higher priority).
