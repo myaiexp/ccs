@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -12,13 +14,14 @@ import (
 	"ccs/internal/ipc"
 	"ccs/internal/session"
 	"ccs/internal/state"
+	"ccs/internal/tabmgr"
 	"ccs/internal/tmux"
 	"ccs/internal/tui"
 	"ccs/internal/watcher"
 )
 
 func main() {
-	// Subcommand dispatch — these exit immediately, no TUI startup
+	// 1. Subcommand dispatch — these exit immediately, no TUI startup
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "launch":
@@ -30,13 +33,14 @@ func main() {
 		}
 	}
 
+	// 2. Load config
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Bootstrap into tmux if not already inside
+	// 3. Bootstrap into tmux if not already inside
 	if !tmux.InTmux() {
 		if err := tmux.Bootstrap(cfg.TmuxSessionName); err != nil {
 			fmt.Fprintf(os.Stderr, "Error bootstrapping tmux: %v\n", err)
@@ -46,6 +50,60 @@ func main() {
 		return
 	}
 
+	// 4. Set @ccs-managed on current (dashboard) window
+	currentWin, _ := tmux.CurrentWindowID()
+	if currentWin != "" {
+		_ = tmux.SetWindowOption(currentWin, "ccs-managed", "1")
+	}
+
+	// 5. Start IPC server
+	socketPath := ipc.SocketPath()
+	_ = os.MkdirAll(filepath.Dir(socketPath), 0700)
+	server, err := ipc.NewServer(socketPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting IPC server: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 6. Signal handler for cleanup
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// 7. Capture and install keybindings
+	savedBindings, _ := tmux.CaptureBindings()
+	_ = tmux.InstallCCSBindings(savedBindings)
+
+	// 8. Set up status line
+	_ = tmux.SetStatusLines(2)
+
+	// 9. Create tab manager
+	sessName, _ := tmux.CurrentSessionName()
+	tracker := session.LoadTracker()
+	st := state.Load()
+	manager := tabmgr.New(sessName, tracker, st, cfg.ClaudeFlags)
+
+	// 10. Adopt existing Claude windows
+	_, _ = manager.ScanAndAdopt()
+
+	// 11. Wire IPC handlers
+	server.SetHandler(ipc.Handler{
+		OnLaunch: func(req ipc.LaunchRequest) ipc.LaunchResponse {
+			windowID, err := manager.Launch(req.ProjectDir, req.ResumeID, req.Prompt, req.OnDone)
+			if err != nil {
+				return ipc.LaunchResponse{OK: false, Error: err.Error()}
+			}
+			return ipc.LaunchResponse{OK: true, SessionID: windowID}
+		},
+		OnExit: func(notif ipc.ExitNotification) {
+			// Will be wired to send TabExitMsg to bubbletea in Task 5
+			manager.HandleExit(notif.WindowID)
+		},
+	})
+
+	// 12. Start IPC server goroutine
+	go server.Serve()
+
+	// 13. Load sessions, watcher
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -53,14 +111,12 @@ func main() {
 	}
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
-	tracker := session.LoadTracker()
 	sessions, err := session.LoadSessions(projectsDir, tracker)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error discovering sessions: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Create file watcher for activity monitoring
 	w, err := watcher.New(cfg.ActivityLines)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not create watcher: %v\n", err)
@@ -70,16 +126,40 @@ func main() {
 		defer w.Close()
 	}
 
-	st := state.Load()
-
+	// 14. Create TUI (existing signature — Task 5 will add manager param)
 	projectsRoot := filepath.Join(home, "Projects")
 	model := tui.New(sessions, cfg, tracker, st, w, projectsDir, projectsRoot)
 
+	// 15. Run TUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// 16. Cleanup function — runs on signal, error exit, and normal exit
+	cleanup := func() {
+		_ = tmux.RestoreBindings(savedBindings)
+		_ = tmux.UnsetStatusFormat()
+		_ = tmux.SetStatusLines(1)
+		// Clear @ccs-managed from all windows in session
+		if windows, err := tmux.SessionWindows(sessName); err == nil {
+			for _, wid := range windows {
+				_ = tmux.SetWindowOption(wid, "ccs-managed", "")
+			}
+		}
+		server.Close()
+	}
+
+	// Run signal handler in background
+	go func() {
+		<-sigCh
+		cleanup()
+		os.Exit(0)
+	}()
+
 	if _, err := p.Run(); err != nil {
+		cleanup()
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	cleanup()
 }
 
 func handleLaunch() {
