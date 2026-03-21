@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"ccs/internal/activity"
 	"ccs/internal/capture"
 	"ccs/internal/types"
 )
@@ -325,7 +324,7 @@ func (m Model) renderDetail(s types.Session) string {
 	assistPrefixStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 	var rightLines []string
 	if s.FilePath != "" {
-		convText := activity.ExtractConversationText(s.FilePath, bodyHeight*6)
+		convText := m.cachedConvText(s.ID, s.FilePath, bodyHeight*6)
 		if convText != "" {
 			rawLines := strings.Split(convText, "\n")
 

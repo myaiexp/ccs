@@ -118,6 +118,7 @@ type Model struct {
 	tabmgr            *tabmgr.Manager
 	activities        map[string][]activity.Entry    // sessionID -> recent entries
 	paneContent       map[string]capture.PaneSnapshot // sessionID -> latest snapshot
+	convTextCache     map[string]string               // sessionID -> cached conversation text
 	projectsDir       string                         // ~/.claude/projects path
 	projectsRoot      string                         // ~/Projects/ path
 	projectDirs       []project.ProjectDir           // scanned project dirs
@@ -148,6 +149,7 @@ func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, 
 		projectsDir:   projectsDir,
 		projectsRoot:  projectsRoot,
 		projectDirs:   project.ScanProjectDirs(projectsRoot),
+		convTextCache:    make(map[string]string),
 		prevActiveIDs:    make(map[string]bool),
 		lastSummaryInput: make(map[string]string),
 	}
@@ -207,6 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ActivityUpdateMsg:
 		m.activities[msg.SessionID] = msg.Entries
+		delete(m.convTextCache, msg.SessionID) // invalidate stale cache
 		if m.watcher != nil {
 			return m, watchCmd(m.watcher)
 		}
@@ -299,11 +302,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case StatusLineTickMsg:
+		var cmds []tea.Cmd
 		if m.tabmgr != nil {
 			m.tabmgr.SyncFromTracker()
-			m.tabmgr.RenderStatusLine()
+			mgr := m.tabmgr
+			cmds = append(cmds, func() tea.Msg {
+				mgr.RenderStatusLine()
+				return nil
+			})
 		}
-		return m, statusLineTickCmd()
+		cmds = append(cmds, statusLineTickCmd())
+		return m, tea.Batch(cmds...)
 
 	case TabExitMsg:
 		if m.tabmgr != nil {
@@ -1240,6 +1249,17 @@ func (m *Model) eagerLoadActivities() {
 			}
 		}
 	}
+}
+
+// cachedConvText returns conversation text for a session, using a cache to avoid
+// re-reading 128KB of JSONL on every View() call.
+func (m *Model) cachedConvText(sessionID, filePath string, maxLines int) string {
+	if text, ok := m.convTextCache[sessionID]; ok {
+		return text
+	}
+	text := activity.ExtractConversationText(filePath, maxLines)
+	m.convTextCache[sessionID] = text
+	return text
 }
 
 func paneCaptureCmd(sessionID, windowID string, lines int) tea.Cmd {
