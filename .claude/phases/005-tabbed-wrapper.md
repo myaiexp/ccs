@@ -1,60 +1,23 @@
-# Tabbed Session Wrapper — Needs Debugging
+# Tabbed Session Wrapper — Debugging Done
 
-> Implemented tabbed session wrapper architecture but it has critical bugs. 2026-03-21.
+> Tabbed session wrapper architecture implemented and debugged. 2026-03-21.
 
-## What Was Built
+## Bugs Fixed
 
-8 commits implementing: tmux primitives (15 functions), IPC package (unix socket server/client, `ccs launch`/`ccs notify-exit` CLI), tab manager (window lifecycle, adoption, status line rendering, on-done callbacks), startup lifecycle (keybinding capture/restore, signal handling, cleanup), TUI refactor (removed follow mode, added attention badges, wired tab manager).
+1. **TUI lag** — `handleRefresh()` was synchronous, blocking bubbletea's Update loop. Fixed with `asyncRefreshCmd()` goroutine + `RefreshDoneMsg`. Pane captures batched into single message per tick (was N messages). Tick intervals increased to 3s. Conv text loading made async via `ConvTextLoadMsg`.
 
-Design docs: `.claude/plans/2026-03-21-tabbed-session-wrapper-design.md` and `.claude/plans/2026-03-21-tabbed-session-wrapper-plan.md`
+2. **tmux keybindings** — `parseBindingLine()` destroyed quoted strings via `strings.Fields()`. Added persistent `original-bindings.json` for crash recovery, `filterCCSBindings()` to detect stale if-shell bindings, raw command preservation in parser.
 
-## Critical Bugs (not debugged yet)
+3. **Status line not visible** — `SetStatusLines/SetStatusFormat` used `-s` (server scope instead of session). Also `status 1` is invalid in tmux (only accepts `on`/`off`/`2`-`5`).
 
-All code was implemented and tests pass, but live testing reveals:
+4. **Multi-line active rows** — restored `statusFadeColors`, `maxActiveStatusLines()`, variable `activeRowLines()`. Kept attention badges.
 
-1. **Still very laggy** — j/k navigation takes seconds. Caching `ExtractConversationText` helped ~30% but major lag remains. Root cause NOT yet identified. Likely candidates:
-   - `handleRefresh()` runs synchronously on 3s tick: calls `session.LoadSessions()` (re-parses JSONL), `project.ScanProjectDirs()` (walks filesystem), `computeStateStatuses()`, `eagerLoadActivities()`
-   - Multiple tmux subprocess spawns per tick (pane capture, status line)
-   - Possible compounding: 1s status line tick + 1s pane capture tick + 3s refresh tick overlapping
+5. **Attention detection** — `stripStatusBar` cut from FIRST separator (removing CC's `❯` prompt). Changed to cut from LAST separator, preserving the prompt for idle detection. Also wired `UpdateAttention()` from `PaneCaptureMsg` handler to tab manager.
 
-2. **tmux keybindings don't work** — `§ space`, `§ 1`, `§ 2` not functional. Possible causes:
-   - `if-shell` command format may be wrong
-   - `@ccs-managed` window option may not be set correctly
-   - Keybinding installation may silently fail
-   - Need to test: `tmux show -wv @ccs-managed` manually, `tmux list-keys -T prefix` to verify bindings
+6. **Crash safety** — `ScanAndAdopt()` removed (was moving windows destructively). Added `cleanupStaleCCSState()` on startup and `ccs cleanup` subcommand for manual recovery.
 
-3. **No second status line visible** — tab bar not appearing. Possible causes:
-   - `tmux set-option -s status 2` may not work as expected on this tmux config
-   - `SetStatusFormat()` may be setting wrong option name
-   - Status line format strings may have syntax errors
-   - User's tmux config may override session-scoped settings
+## Remaining Known Issues
 
-4. **Multi-line active rows were removed** — the expanded active rows with status history (fading colors, newest brightest) were the best feature and should NOT have been removed. The subagent over-simplified. Fix: restore `statusFadeColors`, multi-line status history rendering, and `maxActiveStatusLines()` height budgeting. The only intended change was adding colored attention badges ON TOP of the existing expanded rows, not replacing them.
-
-## Debugging Strategy for Next Session
-
-1. **Start with tmux commands manually** — verify each tmux operation works in isolation:
-   ```bash
-   tmux show -wv @ccs-managed          # is it set?
-   tmux set-option -s status 2          # does 2-line status work?
-   tmux set-option -s status-format[0] "test line 1"
-   tmux list-keys -T prefix | grep -E "Space|\" 1 |\" 2 "
-   ```
-
-2. **Profile the lag** — add timing logs to `handleRefresh()`, `StatusLineTickMsg`, `PaneCaptureTickMsg` to see which is slow
-
-3. **Check keybind installation** — add error logging to `InstallCCSBindings`, verify `CaptureBindings` returns sensible values
-
-4. **Verify attention state flow** — check that `DeriveStatus` results reach `UpdateAttention` on the tab manager, and that attention badges render in views.go
-
-## Files Changed This Session
-
-- `internal/tmux/tmux.go` — 15 new functions
-- `internal/tmux/keybind.go` — NEW: keybinding lifecycle
-- `internal/ipc/` — NEW: protocol.go, server.go, client.go
-- `internal/tabmgr/` — NEW: tabmgr.go, adopt.go, statusline.go
-- `internal/tui/model.go` — tabmgr integration, removed follow mode, added ticks
-- `internal/tui/views.go` — simplified active rows, attention badges, removed follow view
-- `internal/tui/styles.go` — attention badge colors
-- `main.go` — full startup lifecycle refactor
-- `CLAUDE.md` — updated for new architecture
+- Keybindings (`§ space`, `§ 1`, `§ 2`) not yet verified working in practice
+- Window adoption removed — sessions from other tmux sessions won't appear as tabs (they still show as active in dashboard)
+- User considering rewrite in another language
