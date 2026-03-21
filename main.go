@@ -85,25 +85,10 @@ func main() {
 	// 10. Adopt existing Claude windows
 	_, _ = manager.ScanAndAdopt()
 
-	// 11. Wire IPC handlers
-	server.SetHandler(ipc.Handler{
-		OnLaunch: func(req ipc.LaunchRequest) ipc.LaunchResponse {
-			windowID, err := manager.Launch(req.ProjectDir, req.ResumeID, req.Prompt, req.OnDone)
-			if err != nil {
-				return ipc.LaunchResponse{OK: false, Error: err.Error()}
-			}
-			return ipc.LaunchResponse{OK: true, SessionID: windowID}
-		},
-		OnExit: func(notif ipc.ExitNotification) {
-			// Will be wired to send TabExitMsg to bubbletea in Task 5
-			manager.HandleExit(notif.WindowID)
-		},
-	})
-
-	// 12. Start IPC server goroutine
+	// 11. Start IPC server goroutine (handler wired after tea.NewProgram below)
 	go server.Serve()
 
-	// 13. Load sessions, watcher
+	// 12. Load sessions, watcher
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -126,12 +111,27 @@ func main() {
 		defer w.Close()
 	}
 
-	// 14. Create TUI (existing signature — Task 5 will add manager param)
+	// 13. Create TUI
 	projectsRoot := filepath.Join(home, "Projects")
-	model := tui.New(sessions, cfg, tracker, st, w, projectsDir, projectsRoot)
+	model := tui.New(sessions, cfg, tracker, st, w, manager, projectsDir, projectsRoot)
 
-	// 15. Run TUI
+	// 14. Run TUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// 15. Wire IPC handlers (after tea.NewProgram so we can inject messages)
+	server.SetHandler(ipc.Handler{
+		OnLaunch: func(req ipc.LaunchRequest) ipc.LaunchResponse {
+			windowID, err := manager.Launch(req.ProjectDir, req.ResumeID, req.Prompt, req.OnDone)
+			if err != nil {
+				return ipc.LaunchResponse{OK: false, Error: err.Error()}
+			}
+			return ipc.LaunchResponse{OK: true, SessionID: windowID}
+		},
+		OnExit: func(notif ipc.ExitNotification) {
+			manager.HandleExit(notif.WindowID)
+			p.Send(tui.TabExitMsg{WindowID: notif.WindowID})
+		},
+	})
 
 	// 16. Cleanup function — runs on signal, error exit, and normal exit
 	cleanup := func() {

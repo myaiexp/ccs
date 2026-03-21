@@ -19,6 +19,7 @@ import (
 	"ccs/internal/project"
 	"ccs/internal/session"
 	"ccs/internal/state"
+	"ccs/internal/tabmgr"
 	"ccs/internal/types"
 	"ccs/internal/watcher"
 )
@@ -74,6 +75,14 @@ type TransitionSummaryMsg struct {
 	Err       error
 }
 
+// TabExitMsg signals that a session tab's process exited.
+type TabExitMsg struct {
+	WindowID string
+}
+
+// StatusLineTickMsg triggers periodic status line updates.
+type StatusLineTickMsg struct{}
+
 // SearchResult is a union type for search results: either a session or a project directory.
 type SearchResult struct {
 	Session *types.Session // nil for project dir results
@@ -106,8 +115,8 @@ type Model struct {
 	tracker           *session.Tracker
 	state             *state.Store
 	watcher           *watcher.Watcher
+	tabmgr            *tabmgr.Manager
 	activities        map[string][]activity.Entry    // sessionID -> recent entries
-	followID          string                         // session ID being followed (empty = normal)
 	paneContent       map[string]capture.PaneSnapshot // sessionID -> latest snapshot
 	projectsDir       string                         // ~/.claude/projects path
 	projectsRoot      string                         // ~/Projects/ path
@@ -118,7 +127,7 @@ type Model struct {
 	lastSummaryInput  map[string]string              // sessionID -> pane content hash from last status summary call
 }
 
-func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, st *state.Store, w *watcher.Watcher, projectsDir string, projectsRoot string) Model {
+func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, st *state.Store, w *watcher.Watcher, mgr *tabmgr.Manager, projectsDir string, projectsRoot string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.Prompt = "/ "
@@ -133,6 +142,7 @@ func New(sessions []types.Session, cfg *types.Config, tracker *session.Tracker, 
 		tracker:       tracker,
 		state:         st,
 		watcher:       w,
+		tabmgr:        mgr,
 		activities:    make(map[string][]activity.Entry),
 		paneContent:   make(map[string]capture.PaneSnapshot),
 		projectsDir:   projectsDir,
@@ -153,7 +163,7 @@ func (m Model) Init() tea.Cmd {
 	initialStatusTick := tea.Tick(5*time.Second, func(time.Time) tea.Msg {
 		return StatusSummaryTickMsg{}
 	})
-	cmds := []tea.Cmd{tickCmd(), paneCaptureTickCmd(), initialStatusTick}
+	cmds := []tea.Cmd{tickCmd(), paneCaptureTickCmd(), initialStatusTick, statusLineTickCmd()}
 
 	if m.watcher != nil {
 		go m.watcher.Run()
@@ -221,16 +231,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PaneCaptureTickMsg:
 		var cmds []tea.Cmd
-		captured := make(map[string]bool)
 		tmuxWindows := m.tracker.TmuxWindowIDs()
 		for sessID := range tmuxWindows {
 			if cmd := m.captureCmdForSession(sessID); cmd != nil {
-				cmds = append(cmds, cmd)
-				captured[sessID] = true
-			}
-		}
-		if m.followID != "" && !captured[m.followID] {
-			if cmd := m.captureCmdForSession(m.followID); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
@@ -289,7 +292,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Summary != "" {
 			m.state.SetSummary(msg.SessionID, msg.Summary)
 		}
+		// Fire pending on-done callback if waiting
+		if m.tabmgr != nil {
+			m.tabmgr.FirePendingCallback(msg.SessionID, msg.Summary)
+		}
 		return m, nil
+
+	case StatusLineTickMsg:
+		if m.tabmgr != nil {
+			m.tabmgr.SyncFromTracker()
+			m.tabmgr.RenderStatusLine()
+		}
+		return m, statusLineTickCmd()
+
+	case TabExitMsg:
+		if m.tabmgr != nil {
+			m.tabmgr.HandleExit(msg.WindowID)
+		}
+		return m, m.handleRefresh()
 
 	case TickMsg:
 		cmd := m.handleRefresh()
@@ -339,7 +359,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.filter.SetValue("")
 				m.applyFilter()
 				if r.Session != nil {
-					// Session → switch or resume
+					if m.tabmgr != nil {
+						// Active sessions with tmux windows → switch to their tab
+						tmuxWindows := m.tracker.TmuxWindowIDs()
+						if wid, ok := tmuxWindows[r.Session.ID]; ok {
+							m.tabmgr.SwitchTo(wid)
+							return m, nil
+						}
+						// Inactive sessions → launch as new tab, then switch
+						wid, err := m.tabmgr.Launch(r.Session.ProjectDir, r.Session.ID, "", "")
+						if err != nil {
+							m.errMsg = fmt.Sprintf("Launch error: %v", err)
+							return m, nil
+						}
+						m.tabmgr.SwitchTo(wid)
+						return m, nil
+					}
+					// Fallback for no tab manager
 					tmuxWindows := m.tracker.TmuxWindowIDs()
 					if wid, ok := tmuxWindows[r.Session.ID]; ok {
 						return m, TmuxSwitch(wid)
@@ -347,6 +383,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, TmuxLaunchResume(*r.Session, m.config.ClaudeFlags, m.tracker)
 				}
 				// Project dir → launch new session
+				if m.tabmgr != nil {
+					wid, err := m.tabmgr.Launch(r.DirPath, "", "", "")
+					if err != nil {
+						m.errMsg = fmt.Sprintf("Launch error: %v", err)
+						return m, nil
+					}
+					m.tabmgr.SwitchTo(wid)
+					return m, nil
+				}
 				return m, TmuxLaunchNew(r.DirPath, r.DirName, m.config.ClaudeFlags, m.tracker)
 			}
 			m.filtering = false
@@ -463,21 +508,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Number shortcuts: 1-9 for the Nth visible session (active + open combined)
-	if key >= "1" && key <= "9" {
-		n := int(key[0] - '0')
-		idx := n - 1
-		if idx < len(m.filtered) {
-			sess := m.filtered[idx]
-			tmuxWindows := m.tracker.TmuxWindowIDs()
-			if wid, ok := tmuxWindows[sess.ID]; ok {
-				return m, TmuxSwitch(wid)
-			}
-			return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
-		}
-		return m, nil
-	}
-
 	switch key {
 	case "q":
 		return m, tea.Quit
@@ -580,9 +610,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefsIdx = 0
 		return m, nil
 
-	case "f":
-		return m.handleFollow()
-
 	case "N":
 		if len(m.filtered) > 0 {
 			sess := m.filtered[m.sessionIdx]
@@ -595,10 +622,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
-		if m.followID != "" {
-			m.followID = ""
-			return m, nil
-		}
 		if m.filter.Value() != "" {
 			m.filter.SetValue("")
 			m.applyFilter()
@@ -628,33 +651,30 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 		return m, nil
 	}
 	sess := m.filtered[m.sessionIdx]
-	// Active sessions with tmux windows → switch
+
+	if m.tabmgr != nil {
+		// Active sessions with tmux windows → switch to their tab
+		tmuxWindows := m.tracker.TmuxWindowIDs()
+		if wid, ok := tmuxWindows[sess.ID]; ok {
+			m.tabmgr.SwitchTo(wid)
+			return m, nil
+		}
+		// Inactive sessions → launch as new tab, then switch
+		wid, err := m.tabmgr.Launch(sess.ProjectDir, sess.ID, "", "")
+		if err != nil {
+			m.errMsg = fmt.Sprintf("Launch error: %v", err)
+			return m, nil
+		}
+		m.tabmgr.SwitchTo(wid)
+		return m, nil
+	}
+
+	// Fallback for no tab manager (shouldn't happen in practice)
 	tmuxWindows := m.tracker.TmuxWindowIDs()
 	if wid, ok := tmuxWindows[sess.ID]; ok {
 		return m, TmuxSwitch(wid)
 	}
-	// All others → resume in new tmux window
 	return m, TmuxLaunchResume(sess, m.config.ClaudeFlags, m.tracker)
-}
-
-func (m Model) handleFollow() (Model, tea.Cmd) {
-	if len(m.filtered) == 0 {
-		return m, nil
-	}
-	sess := m.filtered[m.sessionIdx]
-
-	if m.followID == sess.ID {
-		m.followID = ""
-		return m, nil
-	}
-
-	if sess.ActiveSource != types.SourceTmux {
-		m.errMsg = "Can only follow sessions with tmux windows"
-		return m, nil
-	}
-
-	m.followID = sess.ID
-	return m, m.captureCmdForSession(sess.ID)
 }
 
 func (m *Model) applyFilter() {
@@ -885,62 +905,9 @@ func (m *Model) displayName(s types.Session) string {
 	return s.Title
 }
 
-// maxActiveStatusLines returns how many status lines each active session may show,
-// capped to fit within terminal height alongside other sections.
-func (m *Model) maxActiveStatusLines() int {
-	active := m.activeSessions()
-	openList := m.openSessions()
-	nActive := len(active)
-	nOpen := len(openList)
-
-	if nActive == 0 || m.height == 0 {
-		return 5
-	}
-
-	// Non-active overhead: border(2) + title(1) + ACTIVE header+margin(2) +
-	// OPEN header+margin(2) + scroll indicator(1) + footer+margin(2) = 10
-	overhead := 10
-
-	// Detail pane
-	if m.sessionIdx >= nActive && nOpen > 0 {
-		overhead += m.detailPaneLines()
-	}
-
-	// 1 header line per active session (no status)
-	overhead += nActive
-
-	// Reserve at least 1 open row
-	if nOpen > 0 {
-		overhead++
-	}
-
-	avail := m.height - overhead
-	if avail <= 0 {
-		return 0
-	}
-
-	perSession := avail / nActive
-	perSession = min(perSession, 3)
-	return perSession
-}
-
-// activeRowLines returns how many lines an active row takes.
-func (m *Model) activeRowLines(s types.Session) int {
-	maxStatus := m.maxActiveStatusLines()
-	lines := 1 // header line
-	history := m.state.StatusHistory(s.ID)
-	if len(history) > 0 {
-		n := len(history)
-		n = min(n, maxStatus)
-		lines += n
-	} else if maxStatus > 0 {
-		if snap, ok := m.paneContent[s.ID]; ok && snap.Content != "" {
-			paneLines := strings.Split(snap.Content, "\n")
-			n := min(2, maxStatus, len(paneLines))
-			lines += n
-		}
-	}
-	return lines
+// activeRowLines returns how many lines an active row takes (always 1 now).
+func (m *Model) activeRowLines(_ types.Session) int {
+	return 1
 }
 
 // scrollWindow returns the start and end indices for the visible open session window.
@@ -1071,6 +1038,12 @@ func statusSummaryCmd(sessionID, paneContent string, maxLines int) tea.Cmd {
 func statusSummaryTickCmd() tea.Cmd {
 	return tea.Tick(2*time.Minute, func(time.Time) tea.Msg {
 		return StatusSummaryTickMsg{}
+	})
+}
+
+func statusLineTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return StatusLineTickMsg{}
 	})
 }
 

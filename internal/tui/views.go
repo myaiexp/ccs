@@ -22,10 +22,6 @@ func (m Model) View() string {
 		return m.renderPrefs()
 	}
 
-	if m.followID != "" {
-		return m.renderFollowView()
-	}
-
 	var sections []string
 
 	// Title + filter + sort indicator
@@ -173,94 +169,7 @@ func (m Model) View() string {
 	return bs.Render(content)
 }
 
-// renderFollowView renders the split layout: compressed session list + live pane output.
-func (m Model) renderFollowView() string {
-	var sections []string
-
-	header := titleStyle.Render("ccs")
-	sortIndicator := dimStyle.Render(fmt.Sprintf("  sort: %s %s", m.sortField, m.sortDir))
-	header += sortIndicator
-	sections = append(sections, header)
-
-	// Compressed session list
-	sessCount := dimStyle.Render(fmt.Sprintf(" (%d)", len(m.filtered)))
-	sessHeader := sectionStyle.Render("SESSIONS") + sessCount
-	sections = append(sections, sessHeader)
-
-	topRows := (m.height * 40 / 100) - 4
-	topRows = max(topRows, 3)
-	topRows = min(topRows, 8, len(m.filtered))
-
-	half := topRows / 2
-	start := max(0, min(m.sessionIdx-half, len(m.filtered)-topRows))
-	end := min(start+topRows, len(m.filtered))
-
-	if len(m.filtered) == 0 {
-		sections = append(sections, dimStyle.Render("  no sessions"))
-	} else {
-		for i := start; i < end; i++ {
-			sections = append(sections, m.renderOpenRow(i+1, m.filtered[i]))
-		}
-	}
-
-	// Follow pane
-	var followedSess *types.Session
-	for _, s := range m.filtered {
-		if s.ID == m.followID {
-			sess := s
-			followedSess = &sess
-			break
-		}
-	}
-
-	contentWidth := max(m.width-6, 40)
-	paneWidth := contentWidth - 2
-
-	paneTitle := "Following: "
-	if followedSess != nil {
-		paneTitle += followedSess.ProjectName + " — " + m.displayName(*followedSess)
-	} else {
-		paneTitle += m.followID
-	}
-	if lipgloss.Width(paneTitle) > paneWidth {
-		paneTitle = paneTitle[:paneWidth-1] + "…"
-	}
-	paneHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99")).Render(paneTitle)
-
-	paneText := dimStyle.Render("Waiting for capture...")
-	if snap, ok := m.paneContent[m.followID]; ok && snap.Content != "" {
-		paneLines := strings.Split(snap.Content, "\n")
-		availPaneRows := max(m.height-len(sections)-6, 3)
-		if len(paneLines) > availPaneRows {
-			paneLines = paneLines[len(paneLines)-availPaneRows:]
-		}
-		paneText = strings.Join(paneLines, "\n")
-	}
-
-	paneContent := paneHeader + "\n" + paneText
-	paneStyle := followPaneStyle
-	if contentWidth > 0 {
-		paneStyle = paneStyle.Width(contentWidth)
-	}
-	sections = append(sections, paneStyle.Render(paneContent))
-
-	followFooter := footerStyle.Render("f unfollow  esc exit  enter switch  / search  ? help  q quit")
-	sections = append(sections, followFooter)
-
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
-	bs := borderStyle
-	if m.width > 0 {
-		bs = bs.Width(m.width - 2)
-	}
-
-	return bs.Render(content)
-}
-
-// renderActiveRow renders an expanded active session (2-3 lines).
-// statusFadeColors defines colors from brightest (most recent) to dimmest (oldest).
-var statusFadeColors = []string{"252", "248", "245", "242", "239"}
-
+// renderActiveRow renders an active session as a single-line row with colored attention badge.
 func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 	isSelected := globalIdx == m.sessionIdx
 	contentWidth := m.width - 5
@@ -270,7 +179,13 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 		cursor = cursorStyle.Render("▸ ")
 	}
 
-	dot := activeDot
+	// Attention state badge from pane capture
+	status := ""
+	if snap, ok := m.paneContent[s.ID]; ok {
+		status = capture.DeriveStatus(snap)
+	}
+	badge := attentionBadge(status)
+
 	numStr := fmt.Sprintf("%3d", globalIdx+1)
 	num := numStyle.Render(numStr)
 
@@ -279,53 +194,17 @@ func (m Model) renderActiveRow(globalIdx int, s types.Session) string {
 		projName = projName[:19] + "…"
 	}
 
-	// Attention state from pane capture
-	status := ""
-	if snap, ok := m.paneContent[s.ID]; ok {
-		status = capture.DeriveStatus(snap)
-	}
-	if status != "" {
-		if len([]rune(status)) > 50 {
-			status = string([]rune(status)[:50])
-		}
-		status = statusStyle.Render(status)
-	}
+	name := m.displayName(s)
 
 	rightSide, rightWidth := formatRightSide(s.ContextPct, s.LastActive)
 
-	leftParts := fmt.Sprintf("%s%s %s %s", cursor, dot, num, projName)
-	if status != "" {
-		leftParts += "  " + status
-	}
+	leftFixed := 7 + lipgloss.Width(projName) + 2 // badge+space+num+space + proj + gap
+	maxName := max(contentWidth-leftFixed-rightWidth-2, 10)
+	name = truncateToWidth(name, maxName)
+
+	leftParts := fmt.Sprintf("%s%s %s %s  %s", cursor, badge, num, projName, name)
 	gap := max(contentWidth-lipgloss.Width(leftParts)-rightWidth, 1)
-	headerLine := leftParts + strings.Repeat(" ", gap) + rightSide
-
-	var lines []string
-	lines = append(lines, headerLine)
-
-	// Show AI status history with fading colors (newest = brightest, oldest = dimmest)
-	maxShow := m.maxActiveStatusLines()
-	history := m.state.StatusHistory(s.ID)
-	if len(history) > maxShow {
-		history = history[len(history)-maxShow:]
-	}
-
-	if len(history) > 0 {
-		// Display top-to-bottom: oldest first, newest last
-		for i, entry := range history {
-			// Fade index: 0 = oldest shown = dimmest, len-1 = newest = brightest
-			fadeIdx := len(history) - 1 - i
-			if fadeIdx >= len(statusFadeColors) {
-				fadeIdx = len(statusFadeColors) - 1
-			}
-			color := statusFadeColors[fadeIdx]
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
-			text := truncateToWidth(entry.Text, contentWidth-6)
-			lines = append(lines, "      "+style.Render(text))
-		}
-	}
-
-	return strings.Join(lines, "\n")
+	return leftParts + strings.Repeat(" ", gap) + rightSide
 }
 
 // renderOpenRow renders a compact session row for the open section.
@@ -560,7 +439,7 @@ func (m Model) renderFooter() string {
 	if len(m.filtered) > 0 {
 		sess := m.filtered[m.sessionIdx]
 		if sess.StateStatus == types.StatusActive {
-			hints = append(hints, "enter switch", "f follow")
+			hints = append(hints, "enter switch")
 		} else {
 			hints = append(hints, "enter resume")
 		}
@@ -591,10 +470,8 @@ func (m Model) renderHelp() string {
 	help := strings.Join([]string{
 		titleStyle.Render("ccs — Claude Code Sessions"),
 		"",
-		"  1-9         Switch/resume session by number",
-		"  enter       Active → switch, otherwise → resume",
-		"  f           Follow active session (split pane)",
-		"  esc         Exit follow mode / clear filter",
+		"  enter       Active → switch tab, otherwise → resume in new tab",
+		"  esc         Clear filter",
 		"  /           Fuzzy search all sessions + project dirs",
 		"  j/k ↑/↓     Navigate active + open list",
 		"  gg/G        Jump to top/bottom",

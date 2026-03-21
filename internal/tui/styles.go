@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 var (
 	// Border for the whole view
@@ -100,12 +104,11 @@ var (
 			BorderForeground(lipgloss.Color("99")).
 			Padding(1, 2)
 
-	// Follow mode pane
-	followPaneStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("99")).
-			Padding(0, 1).
-			MarginTop(1)
+	// Attention badge styles
+	attentionWaiting    = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))   // yellow
+	attentionPermission = lipgloss.NewStyle().Foreground(lipgloss.Color("208")) // orange
+	attentionError      = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))   // red
+	attentionWorking    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))   // green
 )
 
 func contextStyle(pct int) lipgloss.Style {
@@ -116,4 +119,20 @@ func contextStyle(pct int) lipgloss.Style {
 		return contextYellow
 	}
 	return contextGreen
+}
+
+// attentionBadge returns a colored ● badge based on the attention state string.
+func attentionBadge(status string) string {
+	switch {
+	case status == "Waiting for input":
+		return attentionWaiting.Render("●")
+	case status == "Permission prompt":
+		return attentionPermission.Render("●")
+	case strings.HasPrefix(status, "Error:"):
+		return attentionError.Render("●")
+	case status == "Thinking..." || status == "":
+		return attentionWorking.Render("●")
+	default:
+		return attentionWorking.Render("●")
+	}
 }
