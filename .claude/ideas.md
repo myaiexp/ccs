@@ -139,3 +139,14 @@ Areas to explore (non-exhaustive starting points):
 
 ### Auto-naming prompt iteration
 The haiku naming prompt will need tuning based on real-world results. The initial prompt is task-oriented ("what is this session accomplishing?") but may need refinement. Key insight from discussion: Claude's own `/rename` grabs "interesting" details instead of the actual task — e.g., naming a config-sync setup session "bash-set-e-footgun-fix" because it latched onto a footnote. The ccs prompt must explicitly focus on the goal/task, not incidental details.
+
+## 2026-03-21 — Tabbed Session Wrapper Brainstorm
+
+### Persistent sidebar/header (option C)
+During brainstorming, discussed making the dashboard info always visible alongside the active session tab — a persistent sidebar or header strip. Would show condensed session list + status while the session terminal fills the rest of the space. Deferred in favor of the simpler "dashboard is a tab" model (option A), but a natural evolution once the tab system is working and screen real estate management is proven out.
+
+### tmux control mode (`tmux -C`) for zero-polling architecture
+Persistent stdin/stdout connection to the tmux server that receives all events as structured text. Could replace all polling (PID checks, pane capture ticks, window state) with a single event stream. Would eliminate fork/exec overhead of repeated `tmux` CLI calls. Worth investigating once the polling-based approach is stable — control mode is more complex but fundamentally more efficient.
+
+### Kelo integration improvements
+The `--on-done` callback in `ccs launch` solves the immediate "session busy" problem with Kelo's async dispatch. But deeper integration is possible: Kelo could query ccs for session status (via the unix socket), get real-time attention state notifications, or even manage sessions through ccs's IPC instead of directly starting Claude processes. The unix socket becomes a general management API, not just a launch endpoint.
